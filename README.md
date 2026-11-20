@@ -48,3 +48,7 @@ uses shared spring/easing tokens and respects `prefers-reduced-motion`.
 
 The app can inspect its own checkout: run it locally, then add this repository as
 a local repository to review FlashBee's own uncommitted changes.
+
+## License
+
+MIT © 2026 wangzhuo. See [LICENSE](LICENSE).

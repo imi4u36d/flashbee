@@ -1,8 +1,14 @@
 {
   "name": "flashbee",
   "private": true,
+  "version": "0.1.0",
   "description": "A calm, multi-repository Git viewer for local projects.",
-  "version": "0.0.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imi4u36d/flashbee.git"
+  },
+  "homepage": "https://github.com/imi4u36d/flashbee#readme",
   "type": "module",
   "scripts": {
     "dev": "vite",
