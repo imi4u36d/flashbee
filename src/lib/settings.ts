@@ -1,3 +1,4 @@
+import { persistNativeStore } from './native'
 import type { LocalePreference } from './i18n'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
@@ -22,10 +23,10 @@ export const CODE_SIZE_MAX = 20
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   locale: 'system',
-  uiFont: 'inter',
-  codeFont: 'jetbrains',
-  uiSize: 16,
-  codeSize: 16,
+  uiFont: 'system',
+  codeFont: 'system',
+  uiSize: 15,
+  codeSize: 14,
 }
 
 export const UI_FONT_STACKS: Record<UiFont, string> = {
@@ -97,11 +98,10 @@ export function loadSettings(): AppSettings {
 }
 
 export function saveSettings(settings: AppSettings) {
+  const contents = JSON.stringify({ version: SETTINGS_VERSION, ...settings })
   try {
-    window.localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ version: SETTINGS_VERSION, ...settings }),
-    )
+    window.localStorage.setItem(STORAGE_KEY, contents)
+    persistNativeStore('settings', contents)
   } catch {
     // Preferences still apply for the current session.
   }

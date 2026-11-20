@@ -3,8 +3,8 @@ import type { DiffFile, DiffLine, Hunk, SplitDiffRow } from '../types'
 export function buildSplitRows(hunks: Hunk[]): SplitDiffRow[] {
   const rows: SplitDiffRow[] = []
 
-  for (const hunk of hunks) {
-    rows.push({ kind: 'hunk', hunk })
+  for (const [hunkIndex, hunk] of hunks.entries()) {
+    rows.push({ kind: 'hunk', hunk, hunkIndex })
 
     let cursor = 0
     while (cursor < hunk.lines.length) {

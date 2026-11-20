@@ -1,14 +1,16 @@
-import { FolderPlus, Layers3 } from 'lucide-react'
+import { FolderPlus, Layers3, Sparkles } from 'lucide-react'
 import { useI18n } from '../lib/i18n'
 
 interface WorkspaceEmptyStateProps {
   workspaceName: string
   onAddRepository: () => void
+  onExploreSample: () => void
 }
 
 export function WorkspaceEmptyState({
   workspaceName,
   onAddRepository,
+  onExploreSample,
 }: WorkspaceEmptyStateProps) {
   const { t } = useI18n()
 
@@ -37,10 +39,16 @@ export function WorkspaceEmptyState({
         <h2>{t('workspace.emptyTitle')}</h2>
         <p>{t('workspace.emptyDescription')}</p>
 
-        <button className="empty-add-button" onClick={onAddRepository}>
-          <FolderPlus size={14} strokeWidth={2} />
-          {t('workspace.emptyCta')}
-        </button>
+        <div className="empty-actions">
+          <button className="empty-add-button" onClick={onAddRepository}>
+            <FolderPlus size={14} strokeWidth={2} />
+            {t('workspace.emptyCta')}
+          </button>
+          <button className="empty-sample-button" onClick={onExploreSample}>
+            <Sparkles size={13} strokeWidth={1.9} />
+            {t('workspace.emptySample')}
+          </button>
+        </div>
       </div>
     </div>
   )

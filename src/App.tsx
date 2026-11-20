@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, LoaderCircle } from 'lucide-react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
+import { CheckCircle2, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { CleanState } from './components/CleanState'
 import { CommandPalette } from './components/CommandPalette'
+import { ConflictResolver } from './components/ConflictResolver'
 import { DiffViewer } from './components/DiffViewer'
 import { I18nProvider } from './components/I18nProvider'
 import {
@@ -9,15 +11,26 @@ import {
   ConfirmRemoveDialog,
   CreateWorkspaceDialog,
 } from './components/ManageDialogs'
+import { RemoteDialog } from './components/RemoteDialog'
 import { RepoBar } from './components/RepoBar'
 import { SettingsModal } from './components/SettingsModal'
 import { Sidebar } from './components/Sidebar'
+import { SidebarResizer } from './components/SidebarResizer'
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState'
 import { fileStats } from './data/projects'
+import { copyText, showContextMenu, type ContextMenuEntry } from './lib/contextMenu'
 import { createTranslator, resolveLocale, type TranslationKey } from './lib/i18n'
 import { warmHighlighter } from './lib/highlight'
+import { loadSidebarWidth, saveSidebarWidth } from './lib/layout'
+import { invokeNative, isNative, onMenuCommand } from './lib/native'
 import {
+  RepositoryApiError,
+  abortMerge,
+  completeMerge,
+  discoverRepositoryTarget,
   fetchRepositorySnapshot,
+  pullRepository,
+  pushRepository,
   snapshotFiles,
 } from './lib/repositoryApi'
 import {
@@ -31,16 +44,18 @@ import {
   type ResolvedTheme,
 } from './lib/settings'
 import {
+  createProjectGroup,
   createRepository,
+  createSampleWorkspace,
   createWorkspace,
   initialSelectionForWorkspaces,
   loadWorkspaceState,
   saveWorkspaceState,
   workspaceLabel,
-  type NewRepositoryInput,
+  type RepositoryAddRequest,
   type WorkspaceState,
 } from './lib/workspaces'
-import type { DiffFile, DiffMode, Project } from './types'
+import type { DiffFile, DiffMode, Project, ProjectGroup } from './types'
 
 type Toast = {
   id: number
@@ -53,7 +68,26 @@ type ManageDialog =
   | { kind: 'add-repository' }
   | { kind: 'delete-workspace' }
   | { kind: 'delete-repository' }
+  | { kind: 'delete-group'; group: ProjectGroup }
+  | { kind: 'remote-settings' }
+  | { kind: 'abort-merge' }
   | null
+
+function compactErrorMessage(reason: unknown) {
+  const message =
+    reason instanceof Error
+      ? reason.message
+      : typeof reason === 'string'
+        ? reason
+        : ''
+  const firstLine =
+    message
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? ''
+  if (!firstLine) return ''
+  return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine
+}
 
 export default function App() {
   const [workspaceState, setWorkspaceState] =
@@ -78,14 +112,31 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState<number | null>(loadSidebarWidth)
+  const sidebarRef = useRef<HTMLElement>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [loadingRepositoryId, setLoadingRepositoryId] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState<'pull' | 'push' | null>(null)
+  const [merging, setMerging] = useState(false)
+  const [resolverOpen, setResolverOpen] = useState(false)
+  const [scanningGroupId, setScanningGroupId] = useState<string | null>(null)
+  const [loadingRepositoryId, setLoadingRepositoryId] = useState<string | null>(
+    () => {
+      const initialWorkspaceEntry =
+        workspaceState.workspaces.find(
+          (workspace) => workspace.id === workspaceState.activeWorkspaceId,
+        ) ?? workspaceState.workspaces[0]
+      const initialProject = initialWorkspaceEntry?.projects[0]
+      return initialProject?.source === 'local' ? initialProject.id : null
+    },
+  )
   const [toast, setToast] = useState<Toast | null>(null)
   const [, setHighlightReady] = useState(false)
   const previousTheme = useRef<ResolvedTheme | null>(
     (document.documentElement.dataset.theme as ResolvedTheme | undefined) ?? null,
   )
   const themeTransitionTimer = useRef<number | null>(null)
+  const menuActionRef = useRef<(command: string) => void>(() => undefined)
+  const refreshOnFocusRef = useRef<() => void>(() => undefined)
 
   const resolvedTheme = resolveTheme(settings.theme, systemDark)
   const locale = resolveLocale(settings.locale)
@@ -102,6 +153,15 @@ export default function App() {
     workspaceProjects.find((project) => project.id === activeProjectId) ??
     workspaceProjects[0] ??
     null
+  const activeProjectName = activeProject?.name
+  const conflictCount = activeProject?.conflicts?.length ?? 0
+  const mergeInProgress = Boolean(activeProject?.mergeInProgress)
+  const hasMergeWork =
+    activeProject?.source === 'local' &&
+    (conflictCount > 0 || mergeInProgress)
+  const showConflictResolver = hasMergeWork && resolverOpen
+  const showConflictBanner = hasMergeWork && !resolverOpen
+  const mergeReady = mergeInProgress && conflictCount === 0
 
   const activeFile = useMemo(() => {
     if (!activeProject) return null
@@ -161,6 +221,12 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // Opening a repository that still has merge work should land on the
+    // resolver instead of hiding it behind the diff view.
+    if (hasMergeWork) setResolverOpen(true)
+  }, [activeProject?.id, conflictCount, mergeInProgress, hasMergeWork])
+
+  useEffect(() => {
     saveWorkspaceState(workspaceState)
   }, [workspaceState])
 
@@ -174,8 +240,20 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
-    document.title = t('app.title')
-  }, [locale, t])
+    if (isNative) {
+      void invokeNative('set_menu_locale', { locale }).catch(() => undefined)
+    }
+  }, [locale])
+
+  useEffect(() => {
+    const title = activeProjectName
+      ? `${activeProjectName} — FlashBee`
+      : 'FlashBee'
+    document.title = title
+    if (isNative) {
+      void invokeNative('set_window_title', { title }).catch(() => undefined)
+    }
+  }, [activeProjectName])
 
   useLayoutEffect(() => {
     const root = document.documentElement
@@ -222,10 +300,27 @@ export default function App() {
     return () => window.clearTimeout(timer)
   }, [toast])
 
+  useEffect(
+    () => onMenuCommand((command) => menuActionRef.current(command)),
+    [],
+  )
+
+  useEffect(() => {
+    if (!isNative) return
+    const refresh = () => refreshOnFocusRef.current()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [])
+
   const applySnapshot = (
     projectId: string,
     snapshot: Awaited<ReturnType<typeof fetchRepositorySnapshot>>,
   ) => {
+    const remoteBranches = snapshot.remoteBranches ?? []
+    const knownBranches = [
+      ...snapshot.branches,
+      ...remoteBranches.map((branch) => branch.name),
+    ]
     setWorkspaceState((current) => ({
       ...current,
       workspaces: current.workspaces.map((workspace) => ({
@@ -236,7 +331,15 @@ export default function App() {
             ...project,
             files: snapshotFiles(snapshot),
             branches: snapshot.branches,
-            branch: snapshot.branches.includes(project.branch)
+            currentBranch: snapshot.currentBranch,
+            remoteBranches,
+            remotes: snapshot.remotes ?? [],
+            upstream: snapshot.upstream,
+            ahead: snapshot.ahead ?? 0,
+            behind: snapshot.behind ?? 0,
+            conflicts: snapshot.conflicts ?? [],
+            mergeInProgress: Boolean(snapshot.mergeInProgress),
+            branch: knownBranches.includes(project.branch)
               ? project.branch
               : snapshot.currentBranch,
             updated: 'now',
@@ -253,7 +356,10 @@ export default function App() {
     setLoadingRepositoryId(activeProject.id)
     const load = async () => {
       try {
-        const snapshot = await fetchRepositorySnapshot(activeProject.path)
+        const snapshot = await fetchRepositorySnapshot(
+          activeProject.path,
+          activeProject.branch,
+        )
         if (cancelled) return
         applySnapshot(activeProject.id, snapshot)
       } catch {
@@ -269,9 +375,14 @@ export default function App() {
     return () => {
       cancelled = true
     }
-    // Refresh when a different local repository becomes active.
+    // Refresh when the active repository or comparison branch changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject?.id, activeProject?.path, activeProject?.source])
+  }, [
+    activeProject?.id,
+    activeProject?.path,
+    activeProject?.source,
+    activeProject?.branch,
+  ])
 
   const queryForWorkspace = (workspaceId: string) => {
     const target = workspaces.find((workspace) => workspace.id === workspaceId)
@@ -296,7 +407,37 @@ export default function App() {
     setSettingsOpen(false)
   }
 
+  const revealProjectGroup = (project: Project) => {
+    if (!project.groupId) return
+    setWorkspaceState((current) => {
+      const target = current.workspaces.find(
+        (workspace) => workspace.id === activeWorkspace.id,
+      )
+      const collapsed = target?.groups?.some(
+        (group) => group.id === project.groupId && group.collapsed,
+      )
+      if (!collapsed) return current
+
+      return {
+        ...current,
+        workspaces: current.workspaces.map((workspace) =>
+          workspace.id === activeWorkspace.id
+            ? {
+                ...workspace,
+                groups: (workspace.groups ?? []).map((group) =>
+                  group.id === project.groupId
+                    ? { ...group, collapsed: false }
+                    : group,
+                ),
+              }
+            : workspace,
+        ),
+      }
+    })
+  }
+
   const activateProject = (project: Project) => {
+    revealProjectGroup(project)
     setActiveProjectId(project.id)
     setExpandedProjectId(project.id)
     setSelectedByProject((current) => ({
@@ -316,6 +457,7 @@ export default function App() {
   }
 
   const selectFile = (project: Project, file: DiffFile) => {
+    revealProjectGroup(project)
     setActiveProjectId(project.id)
     setExpandedProjectId(project.id)
     setSelectedByProject((current) => ({
@@ -339,7 +481,7 @@ export default function App() {
 
     if (activeProject?.source === 'local') {
       setRefreshing(true)
-      fetchRepositorySnapshot(activeProject.path)
+      fetchRepositorySnapshot(activeProject.path, activeProject.branch)
         .then((snapshot) => {
           applySnapshot(activeProject.id, snapshot)
           showToast('app.repoRefreshed', { count: snapshot.files.length })
@@ -369,6 +511,119 @@ export default function App() {
     }))
   }
 
+  const reloadProjectSnapshot = async (project: Project) => {
+    const snapshot = await fetchRepositorySnapshot(project.path, project.branch)
+    applySnapshot(project.id, snapshot)
+  }
+
+  const handlePull = () => {
+    if (!activeProject || activeProject.source !== 'local' || syncing) return
+    const project = activeProject
+    setSyncing('pull')
+    pullRepository(project.path)
+      .then((outcome) => {
+        if (outcome.conflicts.length > 0) {
+          setResolverOpen(true)
+          showToast('repo.pullConflicts', { count: outcome.conflicts.length })
+        } else {
+          showToast('repo.pulled')
+        }
+      })
+      .catch((reason) => {
+        const code = reason instanceof RepositoryApiError ? reason.code : ''
+        if (code === 'no_remote') {
+          showToast('repo.noRemote')
+        } else if (code === 'no_upstream') {
+          showToast('repo.noUpstream')
+        } else {
+          showToast('repo.pullFailed', {
+            message: compactErrorMessage(reason) || t('repo.actionFailed'),
+          })
+        }
+      })
+      .finally(() => {
+        setSyncing(null)
+        void reloadProjectSnapshot(project).catch(() => undefined)
+      })
+  }
+
+  const handlePush = () => {
+    if (!activeProject || activeProject.source !== 'local' || syncing) return
+    const project = activeProject
+    setSyncing('push')
+    pushRepository(project.path)
+      .then(() => showToast('repo.pushed'))
+      .catch((reason) => {
+        const code = reason instanceof RepositoryApiError ? reason.code : ''
+        if (code === 'no_remote') {
+          showToast('repo.noRemote')
+        } else if (code === 'no_upstream') {
+          showToast('repo.noUpstream')
+        } else if (code === 'detached_head') {
+          showToast('repo.detachedHead')
+        } else {
+          showToast('repo.pushFailed', {
+            message: compactErrorMessage(reason) || t('repo.actionFailed'),
+          })
+        }
+      })
+      .finally(() => {
+        setSyncing(null)
+        void reloadProjectSnapshot(project).catch(() => undefined)
+      })
+  }
+
+  const handleRemoteSaved = () => {
+    setManageDialog(null)
+    showToast('repo.remoteSaved')
+    if (activeProject?.source === 'local') {
+      void reloadProjectSnapshot(activeProject).catch(() => undefined)
+    }
+  }
+
+  const handleConflictsResolved = async () => {
+    if (!activeProject || activeProject.source !== 'local') return
+    try {
+      await reloadProjectSnapshot(activeProject)
+    } catch {
+      showToast('repo.refreshFailed')
+    }
+  }
+
+  const handleCompleteMerge = () => {
+    if (!activeProject || activeProject.source !== 'local' || merging) return
+    const project = activeProject
+    setMerging(true)
+    completeMerge(project.path)
+      .then(async () => {
+        await reloadProjectSnapshot(project)
+        setResolverOpen(false)
+        showToast('conflict.mergeCompleted')
+      })
+      .catch(() => showToast('conflict.completeFailed'))
+      .finally(() => setMerging(false))
+  }
+
+  const handleAbortMerge = () => {
+    if (!activeProject || merging) return
+    setManageDialog({ kind: 'abort-merge' })
+  }
+
+  const confirmAbortMerge = () => {
+    if (!activeProject || activeProject.source !== 'local' || merging) return
+    const project = activeProject
+    setManageDialog(null)
+    setMerging(true)
+    abortMerge(project.path)
+      .then(async () => {
+        await reloadProjectSnapshot(project)
+        setResolverOpen(false)
+        showToast('conflict.mergeAborted')
+      })
+      .catch(() => showToast('conflict.abortFailed'))
+      .finally(() => setMerging(false))
+  }
+
   const updateSettings = (patch: Partial<AppSettings>) => {
     setSettings((current) => ({ ...current, ...patch }))
   }
@@ -378,10 +633,26 @@ export default function App() {
     showToast('settings.resetToast')
   }
 
+  const commitSidebarWidth = (width: number) => {
+    setSidebarWidth(width)
+    saveSidebarWidth(width)
+  }
+
+  const resetSidebarWidth = () => {
+    setSidebarWidth(null)
+    saveSidebarWidth(null)
+  }
+
   const openSettings = () => {
     setPaletteOpen(false)
     setManageDialog(null)
     setSettingsOpen(true)
+  }
+
+  const openPalette = () => {
+    setSettingsOpen(false)
+    setManageDialog(null)
+    setPaletteOpen(true)
   }
 
   const openAddRepository = () => {
@@ -423,26 +694,111 @@ export default function App() {
     showToast('workspace.created', { name })
   }
 
-  const handleAddRepository = (input: NewRepositoryInput) => {
-    if (!activeWorkspace) return
-    const project = createRepository(input, activeWorkspace.projects)
+  const hydrateProjects = (projects: Project[]) => {
+    // Repositories are read one by one so the sidebar shows real change counts
+    // without spawning a burst of Git processes.
+    void (async () => {
+      for (const project of projects) {
+        try {
+          const snapshot = await fetchRepositorySnapshot(
+            project.path,
+            project.branch,
+          )
+          applySnapshot(project.id, snapshot)
+        } catch {
+          // Leave it empty until the user opens it.
+        }
+      }
+    })()
+  }
+
+  const handleAddRepositories = (request: RepositoryAddRequest) => {
+    if (!activeWorkspace || request.repositories.length === 0) return
+
+    const knownPaths = new Set(
+      activeWorkspace.projects.map((project) => project.path),
+    )
+    const additions = request.repositories.filter((input) => {
+      if (knownPaths.has(input.path)) return false
+      knownPaths.add(input.path)
+      return true
+    })
+    if (additions.length === 0) return
+
+    const groups = activeWorkspace.groups ?? []
+    let group: ProjectGroup | undefined
+    let newGroup: ProjectGroup | undefined
+    if (request.group) {
+      group = groups.find((entry) => entry.path === request.group?.path)
+      if (!group) {
+        group = createProjectGroup(request.group)
+        newGroup = group
+      }
+    }
+
+    const created: Project[] = []
+    for (const input of additions) {
+      created.push(
+        createRepository(
+          input,
+          [...activeWorkspace.projects, ...created],
+          group?.id,
+        ),
+      )
+    }
+
     setWorkspaceState((current) => ({
       ...current,
-      workspaces: current.workspaces.map((workspace) =>
-        workspace.id === activeWorkspace.id
-          ? { ...workspace, projects: [...workspace.projects, project] }
-          : workspace,
-      ),
+      workspaces: current.workspaces.map((workspace) => {
+        if (workspace.id !== activeWorkspace.id) return workspace
+
+        const nextGroups = newGroup
+          ? [...(workspace.groups ?? []), newGroup]
+          : group
+            ? (workspace.groups ?? []).map((entry) =>
+                entry.id === group?.id
+                  ? { ...entry, collapsed: false }
+                  : entry,
+              )
+            : workspace.groups
+
+        return {
+          ...workspace,
+          groups: nextGroups,
+          projects: [...workspace.projects, ...created],
+        }
+      }),
     }))
-    setActiveProjectId(project.id)
-    setExpandedProjectId(project.id)
-    setSelectedByProject((current) => ({
-      ...current,
-      [project.id]: project.files[0]?.path ?? '',
-    }))
+    setActiveProjectId(created[0].id)
+    setExpandedProjectId(created[0].id)
+    setSelectedByProject((current) => {
+      const next = { ...current }
+      for (const project of created) {
+        next[project.id] = project.files[0]?.path ?? ''
+      }
+      return next
+    })
     setManageDialog(null)
     setPaletteOpen(false)
-    showToast('repo.created', { name: project.name })
+
+    if (group) {
+      showToast(
+        created.length === 1
+          ? 'repo.groupCreatedOne'
+          : 'repo.groupCreatedMany',
+        { name: group.name, count: created.length },
+      )
+    } else {
+      showToast(
+        created.length === 1 ? 'repo.created' : 'repo.createdMany',
+        created.length === 1
+          ? { name: created[0].name }
+          : { count: created.length },
+      )
+    }
+
+    // The first repository is hydrated by the active-repository effect.
+    hydrateProjects(created.slice(1))
   }
 
   const handleRemoveRepository = () => {
@@ -469,6 +825,133 @@ export default function App() {
     setManageDialog(null)
     setPaletteOpen(false)
     showToast('repo.removed', { name: removed.name })
+  }
+
+  const toggleGroup = (group: ProjectGroup) => {
+    setWorkspaceState((current) => ({
+      ...current,
+      workspaces: current.workspaces.map((workspace) =>
+        workspace.id === activeWorkspace.id
+          ? {
+              ...workspace,
+              groups: (workspace.groups ?? []).map((entry) =>
+                entry.id === group.id
+                  ? { ...entry, collapsed: !entry.collapsed }
+                  : entry,
+              ),
+            }
+          : workspace,
+      ),
+    }))
+  }
+
+  const rescanGroup = (group: ProjectGroup) => {
+    if (scanningGroupId) return
+
+    setScanningGroupId(group.id)
+    const workspaceId = activeWorkspace.id
+    const knownPaths = new Set(
+      activeWorkspace.projects.map((project) => project.path),
+    )
+
+    void discoverRepositoryTarget(group.path)
+      .then((discovery) => {
+        const candidates = discovery.repositories.filter(
+          (entry) => entry.path !== group.path && !knownPaths.has(entry.path),
+        )
+        if (candidates.length === 0) {
+          showToast('repo.groupUpToDate', { name: group.name })
+          return
+        }
+
+        const created: Project[] = []
+        for (const entry of candidates) {
+          created.push(
+            createRepository(
+              {
+                name: entry.name,
+                path: entry.path,
+                branch: entry.currentBranch,
+                branches: entry.branches,
+              },
+              [...activeWorkspace.projects, ...created],
+              group.id,
+            ),
+          )
+        }
+
+        setWorkspaceState((current) => ({
+          ...current,
+          workspaces: current.workspaces.map((workspace) =>
+            workspace.id === workspaceId
+              ? {
+                  ...workspace,
+                  groups: (workspace.groups ?? []).map((entry) =>
+                    entry.id === group.id
+                      ? { ...entry, collapsed: false }
+                      : entry,
+                  ),
+                  projects: [...workspace.projects, ...created],
+                }
+              : workspace,
+          ),
+        }))
+        hydrateProjects(created)
+        showToast(
+          created.length === 1
+            ? 'repo.groupRescannedOne'
+            : 'repo.groupRescannedMany',
+          { name: group.name, count: created.length },
+        )
+      })
+      .catch(() => showToast('repo.refreshFailed'))
+      .finally(() => setScanningGroupId(null))
+  }
+
+  const requestDeleteGroup = (group: ProjectGroup) => {
+    setManageDialog({ kind: 'delete-group', group })
+  }
+
+  const handleRemoveGroup = () => {
+    if (manageDialog?.kind !== 'delete-group') return
+    const group = manageDialog.group
+    const removedIds = new Set(
+      activeWorkspace.projects
+        .filter((project) => project.groupId === group.id)
+        .map((project) => project.id),
+    )
+    const remaining = activeWorkspace.projects.filter(
+      (project) => !removedIds.has(project.id),
+    )
+
+    setWorkspaceState((current) => ({
+      ...current,
+      workspaces: current.workspaces.map((workspace) =>
+        workspace.id === activeWorkspace.id
+          ? {
+              ...workspace,
+              projects: remaining,
+              groups: (workspace.groups ?? []).filter(
+                (entry) => entry.id !== group.id,
+              ),
+            }
+          : workspace,
+      ),
+    }))
+
+    if (activeProject && removedIds.has(activeProject.id)) {
+      setActiveProjectId(remaining[0]?.id ?? '')
+      setExpandedProjectId(remaining[0]?.id ?? null)
+    } else if (expandedProjectId && removedIds.has(expandedProjectId)) {
+      setExpandedProjectId(null)
+    }
+    setSelectedByProject((current) => {
+      const next = { ...current }
+      for (const id of removedIds) delete next[id]
+      return next
+    })
+    setManageDialog(null)
+    showToast('repo.groupRemoved', { name: group.name })
   }
 
   const handleDeleteWorkspace = () => {
@@ -502,6 +985,203 @@ export default function App() {
     showToast('workspace.deleted', { name: removedName })
   }
 
+  refreshOnFocusRef.current = () => {
+    if (!activeProject || activeProject.source !== 'local' || refreshing) return
+    void fetchRepositorySnapshot(activeProject.path, activeProject.branch)
+      .then((snapshot) => applySnapshot(activeProject.id, snapshot))
+      .catch(() => undefined)
+  }
+
+  const refreshProject = (project: Project) => {
+    if (project.source !== 'local') {
+      showToast('app.refreshed')
+      return
+    }
+    if (activeProject?.id === project.id) {
+      handleRefresh()
+      return
+    }
+    fetchRepositorySnapshot(project.path, project.branch)
+      .then((snapshot) => {
+        applySnapshot(project.id, snapshot)
+        showToast('app.repoRefreshed', { count: snapshot.files.length })
+      })
+      .catch(() => showToast('repo.refreshFailed'))
+  }
+
+  const copyPath = (path: string) => {
+    void copyText(path)
+      .then(() => showToast('diff.pathCopied'))
+      .catch(() => showToast('diff.copyFailed'))
+  }
+
+  const runPathAction = (command: string, path: string) => {
+    if (!isNative) return
+    void invokeNative(command, { path }).catch(() => showToast('repo.actionFailed'))
+  }
+
+  const handleProjectContextMenu = (
+    project: Project,
+    event: ReactMouseEvent,
+  ) => {
+    const local = project.source === 'local'
+    const entries: ContextMenuEntry[] = []
+
+    if (local) {
+      entries.push({
+        label: t('repo.revealInFinder'),
+        action: () => runPathAction('reveal_in_finder', project.path),
+      })
+      entries.push({
+        label: t('repo.openInEditor'),
+        action: () => runPathAction('open_in_editor', project.path),
+      })
+      entries.push('separator')
+    }
+
+    entries.push({
+      label: t('repo.copyPath'),
+      action: () => copyPath(project.path),
+    })
+
+    if (local) {
+      entries.push('separator')
+      entries.push({
+        label: t('repo.refresh'),
+        action: () => refreshProject(project),
+      })
+    }
+
+    entries.push('separator')
+    entries.push({
+      label: t('repo.remove'),
+      danger: true,
+      action: () => {
+        activateProject(project)
+        setManageDialog({ kind: 'delete-repository' })
+      },
+    })
+
+    showContextMenu(event, entries)
+  }
+
+  const handleGroupContextMenu = (
+    group: ProjectGroup,
+    event: ReactMouseEvent,
+  ) => {
+    const entries: ContextMenuEntry[] = [
+      {
+        label: t('repo.revealInFinder'),
+        action: () => runPathAction('reveal_in_finder', group.path),
+      },
+      {
+        label: t('repo.openInEditor'),
+        action: () => runPathAction('open_in_editor', group.path),
+      },
+      'separator',
+      {
+        label: t('repo.copyPath'),
+        action: () => copyPath(group.path),
+      },
+      'separator',
+      {
+        label: t('repo.groupRescan'),
+        action: () => rescanGroup(group),
+      },
+      'separator',
+      {
+        label: t('repo.groupRemove'),
+        danger: true,
+        action: () => requestDeleteGroup(group),
+      },
+    ]
+
+    showContextMenu(event, entries)
+  }
+
+  const handleFileContextMenu = (
+    project: Project,
+    file: DiffFile,
+    event: ReactMouseEvent,
+  ) => {
+    activateProject(project)
+    setSelectedByProject((current) => ({
+      ...current,
+      [project.id]: file.path,
+    }))
+
+    const local = project.source === 'local'
+    const absolutePath = `${project.path.replace(/\/+$/, '')}/${file.path}`
+    const entries: ContextMenuEntry[] = []
+
+    if (local) {
+      entries.push({
+        label: t('repo.revealInFinder'),
+        action: () => runPathAction('reveal_in_finder', absolutePath),
+      })
+      entries.push({
+        label: t('repo.openInEditor'),
+        action: () => runPathAction('open_in_editor', absolutePath),
+      })
+      entries.push({
+        label: t('repo.openInDefaultApp'),
+        action: () => runPathAction('open_path', absolutePath),
+      })
+      entries.push('separator')
+    }
+
+    entries.push({
+      label: t('diff.copyPath'),
+      action: () => copyPath(local ? absolutePath : file.path),
+    })
+    entries.push({
+      label: t('diff.copyRelativePath'),
+      action: () => copyPath(file.path),
+    })
+
+    if (local) {
+      entries.push('separator')
+      entries.push({
+        label: t('repo.refresh'),
+        action: () => refreshProject(project),
+      })
+    }
+
+    showContextMenu(event, entries)
+  }
+
+  const handleExploreSample = () => {
+    const existing = workspaces.find((workspace) => workspace.id === 'sample')
+    const sample = existing ?? createSampleWorkspace()
+
+    if (existing) {
+      setWorkspaceState((current) => ({
+        ...current,
+        activeWorkspaceId: 'sample',
+      }))
+    } else {
+      setWorkspaceState((current) => ({
+        workspaces: [...current.workspaces, sample],
+        activeWorkspaceId: sample.id,
+      }))
+    }
+
+    setActiveProjectId(sample.projects[0]?.id ?? '')
+    setExpandedProjectId(sample.projects[0]?.id ?? null)
+    setSelectedByProject((current) => {
+      const next = { ...current }
+      for (const project of sample.projects) {
+        if (!(project.id in next)) {
+          next[project.id] = project.files[0]?.path ?? ''
+        }
+      }
+      return next
+    })
+    setPaletteOpen(false)
+    setManageDialog(null)
+    showToast('workspace.sampleOpened')
+  }
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
@@ -516,6 +1196,9 @@ export default function App() {
         }
         return
       }
+
+      // Native menu accelerators own the Command-key shortcuts.
+      if (isNative && (event.metaKey || event.ctrlKey)) return
 
       if ((event.metaKey || event.ctrlKey) && event.key === ',') {
         event.preventDefault()
@@ -570,26 +1253,80 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   })
 
+  menuActionRef.current = (command) => {
+    switch (command) {
+      case 'settings':
+        openSettings()
+        break
+      case 'open-repository':
+        openAddRepository()
+        break
+      case 'new-workspace':
+        openCreateWorkspace()
+        break
+      case 'toggle-sidebar':
+        setSidebarCollapsed((current) => !current)
+        break
+      case 'command-palette':
+        openPalette()
+        break
+      case 'split-diff':
+        setMode('split')
+        break
+      case 'unified-diff':
+        setMode('unified')
+        break
+      case 'refresh':
+        handleRefresh()
+        break
+      case 'previous-file':
+        goToFile(-1)
+        break
+      case 'next-file':
+        goToFile(1)
+        break
+      default:
+        break
+    }
+  }
+
   return (
     <I18nProvider locale={locale}>
       <div className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
         {!sidebarCollapsed && (
-          <Sidebar
-            workspace={activeWorkspace}
-            workspaces={workspaces}
-            projects={workspaceProjects}
-            activeProjectId={activeProject?.id ?? ''}
-            expandedProjectId={expandedProjectId}
-            selectedFile={activeFile?.path ?? null}
-            onProjectClick={handleProjectClick}
-            onSelectFile={selectFile}
-            onSwitchWorkspace={queryForWorkspace}
-            onCreateWorkspace={openCreateWorkspace}
-            onRequestDeleteWorkspace={requestDeleteWorkspace}
-            onAddRepository={openAddRepository}
-            onQuickOpen={() => setPaletteOpen(true)}
-            onCollapse={() => setSidebarCollapsed(true)}
-          />
+          <>
+            <Sidebar
+              ref={sidebarRef}
+              width={sidebarWidth}
+              workspace={activeWorkspace}
+              workspaces={workspaces}
+              projects={workspaceProjects}
+              groups={activeWorkspace.groups ?? []}
+              activeProjectId={activeProject?.id ?? ''}
+              expandedProjectId={expandedProjectId}
+              selectedFile={activeFile?.path ?? null}
+              scanningGroupId={scanningGroupId}
+              onProjectClick={handleProjectClick}
+              onSelectFile={selectFile}
+              onSwitchWorkspace={queryForWorkspace}
+              onCreateWorkspace={openCreateWorkspace}
+              onRequestDeleteWorkspace={requestDeleteWorkspace}
+              onAddRepository={openAddRepository}
+              onQuickOpen={openPalette}
+              onCollapse={() => setSidebarCollapsed(true)}
+              onProjectContextMenu={handleProjectContextMenu}
+              onFileContextMenu={handleFileContextMenu}
+              onGroupContextMenu={handleGroupContextMenu}
+              onToggleGroup={toggleGroup}
+              onRescanGroup={rescanGroup}
+            />
+            <SidebarResizer
+              sidebarRef={sidebarRef}
+              label={t('sidebar.resize')}
+              onCommit={commitSidebarWidth}
+              onReset={resetSidebarWidth}
+            />
+          </>
         )}
 
         <div className="app-main">
@@ -598,31 +1335,109 @@ export default function App() {
             workspaceName={activeWorkspaceName}
             sidebarCollapsed={sidebarCollapsed}
             refreshing={refreshing}
+            syncing={syncing}
+            conflictCount={conflictCount}
+            mergeInProgress={mergeInProgress}
             onOpenSidebar={() => setSidebarCollapsed(false)}
             onOpenSettings={openSettings}
-            onQuickOpen={() => setPaletteOpen(true)}
+            onQuickOpen={openPalette}
             onRefresh={handleRefresh}
+            onPull={handlePull}
+            onPush={handlePush}
             onSelectBranch={handleSelectBranch}
+            onOpenRemoteSettings={() => setManageDialog({ kind: 'remote-settings' })}
+            onResolveConflicts={() => setResolverOpen(true)}
             onAddRepository={openAddRepository}
             onRequestRemoveRepository={requestDeleteRepository}
+            onRevealInFinder={() => {
+              if (activeProject) {
+                runPathAction('reveal_in_finder', activeProject.path)
+              }
+            }}
+            onOpenInEditor={() => {
+              if (activeProject) {
+                runPathAction('open_in_editor', activeProject.path)
+              }
+            }}
+            onCopyPath={() => {
+              if (activeProject) copyPath(activeProject.path)
+            }}
+            onContextMenu={(event) => {
+              if (activeProject) {
+                handleProjectContextMenu(activeProject, event)
+              }
+            }}
           />
 
           <div className="workbench">
             <main className="main-pane">
-              {activeFile && activeProject ? (
+              {showConflictBanner && (
+                <div
+                  className={`conflict-banner ${mergeReady ? 'is-ready' : ''}`}
+                  role="alert"
+                >
+                  <span className="conflict-banner-icon">
+                    {mergeReady ? (
+                      <CheckCircle2 size={15} strokeWidth={2} />
+                    ) : (
+                      <TriangleAlert size={15} strokeWidth={2} />
+                    )}
+                  </span>
+                  <span className="conflict-banner-copy">
+                    <strong>
+                      {mergeReady
+                        ? t('conflict.bannerComplete')
+                        : t('conflict.banner', { count: conflictCount })}
+                    </strong>
+                    <span>
+                      {mergeReady
+                        ? t('conflict.bannerReadyHint')
+                        : t('conflict.bannerHint')}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="conflict-banner-action"
+                    onClick={
+                      mergeReady
+                        ? handleCompleteMerge
+                        : () => setResolverOpen(true)
+                    }
+                  >
+                    {mergeReady
+                      ? t('conflict.completeShort')
+                      : t('conflict.open')}
+                  </button>
+                </div>
+              )}
+
+              {showConflictResolver && activeProject ? (
+                <ConflictResolver
+                  project={activeProject}
+                  conflicts={activeProject.conflicts ?? []}
+                  mergeInProgress={Boolean(activeProject.mergeInProgress)}
+                  mode={mode}
+                  appTheme={resolvedTheme}
+                  onModeChange={setMode}
+                  onToast={showToast}
+                  onResolved={handleConflictsResolved}
+                  onCompleteMerge={handleCompleteMerge}
+                  onAbortMerge={handleAbortMerge}
+                  onClose={() => setResolverOpen(false)}
+                />
+              ) : activeFile && activeProject ? (
                 <DiffViewer
                   key={`${activeProject.id}-${activeFile.path}`}
                   file={activeFile}
                   mode={mode}
-                  baseBranch="main"
+                  baseBranch={activeProject.branch}
+                  repositoryPath={
+                    activeProject.source === 'local' ? activeProject.path : null
+                  }
                   appTheme={resolvedTheme}
                   fileIndex={fileIndex}
                   fileCount={activeProject.files.length}
-                  hasPrev={fileIndex > 0}
-                  hasNext={fileIndex < activeProject.files.length - 1}
                   onModeChange={setMode}
-                  onPrev={() => goToFile(-1)}
-                  onNext={() => goToFile(1)}
                   onToast={showToast}
                 />
               ) : activeProject ? (
@@ -646,6 +1461,7 @@ export default function App() {
                 <WorkspaceEmptyState
                   workspaceName={activeWorkspaceName}
                   onAddRepository={openAddRepository}
+                  onExploreSample={handleExploreSample}
                 />
               )}
             </main>
@@ -685,7 +1501,27 @@ export default function App() {
           <AddRepositoryDialog
             workspaceName={activeWorkspaceName}
             existingPaths={existingRepositoryPaths}
-            onConfirm={handleAddRepository}
+            onConfirm={handleAddRepositories}
+            onClose={() => setManageDialog(null)}
+          />
+        )}
+
+        {manageDialog?.kind === 'remote-settings' &&
+          activeProject &&
+          activeProject.source === 'local' && (
+            <RemoteDialog
+              project={activeProject}
+              onSaved={handleRemoteSaved}
+              onClose={() => setManageDialog(null)}
+            />
+          )}
+
+        {manageDialog?.kind === 'abort-merge' && (
+          <ConfirmRemoveDialog
+            title={t('conflict.abortTitle')}
+            description={t('conflict.abortDescription')}
+            confirmLabel={t('conflict.abortConfirm')}
+            onConfirm={confirmAbortMerge}
             onClose={() => setManageDialog(null)}
           />
         )}
@@ -710,6 +1546,18 @@ export default function App() {
             })}
             confirmLabel={t('repo.remove')}
             onConfirm={handleRemoveRepository}
+            onClose={() => setManageDialog(null)}
+          />
+        )}
+
+        {manageDialog?.kind === 'delete-group' && (
+          <ConfirmRemoveDialog
+            title={t('repo.groupRemoveTitle')}
+            description={t('repo.groupRemoveDescription', {
+              name: manageDialog.group.name,
+            })}
+            confirmLabel={t('repo.groupRemove')}
+            onConfirm={handleRemoveGroup}
             onClose={() => setManageDialog(null)}
           />
         )}

@@ -47,8 +47,8 @@ export function CleanState({ project, onRefresh }: CleanStateProps) {
           </strong>
         </div>
         <div>
-          <span>{t('clean.lastChecked')}</span>
-          <strong className="clean-live">{t('clean.justNow')}</strong>
+          <span>{t('clean.status')}</span>
+          <strong className="clean-live">{t('common.clean')}</strong>
         </div>
       </div>
 

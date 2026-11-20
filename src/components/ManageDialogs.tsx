@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
+  Check,
   CircleAlert,
+  FolderGit2,
   FolderPlus,
   FolderOpen,
+  GitBranch,
+  GitBranchPlus,
   Layers3,
   LoaderCircle,
   Trash2,
@@ -12,11 +16,13 @@ import { BranchSelect } from './BranchSelect'
 import { useI18n } from '../lib/i18n'
 import {
   RepositoryApiError,
-  inspectRepositoryPath,
-  pickRepositoryDirectory,
+  discoverRepositoryTarget,
+  initializeRepository,
+  pickRepositoryFolder,
+  type RepositoryDiscovery,
   type RepositoryInspection,
 } from '../lib/repositoryApi'
-import type { NewRepositoryInput } from '../lib/workspaces'
+import type { RepositoryAddRequest } from '../lib/workspaces'
 
 interface DialogFrameProps {
   title: string
@@ -28,7 +34,7 @@ interface DialogFrameProps {
   children: ReactNode
 }
 
-function DialogFrame({
+export function DialogFrame({
   title,
   description,
   icon,
@@ -119,7 +125,7 @@ function DialogFrame({
   )
 }
 
-function FieldError({ message }: { message: string | null }) {
+export function FieldError({ message }: { message: string | null }) {
   if (!message) return null
   return (
     <span className="manage-error" role="alert">
@@ -208,8 +214,20 @@ export function CreateWorkspaceDialog({
 interface AddRepositoryDialogProps {
   workspaceName: string
   existingPaths: string[]
-  onConfirm: (input: NewRepositoryInput) => void
+  onConfirm: (request: RepositoryAddRequest) => void
   onClose: () => void
+}
+
+function relativeToFolder(folderPath: string, repositoryPath: string) {
+  const base = folderPath.replace(/[\\/]+$/, '')
+  if (repositoryPath === base) return '.'
+  if (
+    repositoryPath.startsWith(`${base}/`) ||
+    repositoryPath.startsWith(`${base}\\`)
+  ) {
+    return repositoryPath.slice(base.length + 1)
+  }
+  return repositoryPath
 }
 
 export function AddRepositoryDialog({
@@ -220,15 +238,31 @@ export function AddRepositoryDialog({
 }: AddRepositoryDialogProps) {
   const { t } = useI18n()
   const [pathInput, setPathInput] = useState('')
-  const [inspection, setInspection] = useState<RepositoryInspection | null>(null)
+  const [repository, setRepository] = useState<RepositoryInspection | null>(null)
+  const [folder, setFolder] = useState<RepositoryDiscovery | null>(null)
   const [branch, setBranch] = useState('')
-  const [busy, setBusy] = useState<'idle' | 'picking' | 'inspecting'>('idle')
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
+  const [busy, setBusy] = useState<
+    'idle' | 'picking' | 'inspecting' | 'initializing'
+  >('idle')
   const [error, setError] = useState<string | null>(null)
 
-  const duplicate = Boolean(
-    inspection && existingPaths.includes(inspection.path),
-  )
+  const existing = new Set(existingPaths)
+  const duplicate = Boolean(repository && existing.has(repository.path))
   const displayedError = duplicate ? t('repo.pathExists') : error
+
+  const availableRepositories = folder
+    ? folder.repositories.filter((entry) => !existing.has(entry.path))
+    : []
+  const selectedRepositories = folder
+    ? folder.repositories.filter(
+        (entry) =>
+          !existing.has(entry.path) && selectedPaths.includes(entry.path),
+      )
+    : []
+  const allSelected =
+    availableRepositories.length > 0 &&
+    availableRepositories.every((entry) => selectedPaths.includes(entry.path))
 
   const errorFor = (reason: unknown) => {
     const code = reason instanceof RepositoryApiError ? reason.code : 'unknown'
@@ -243,23 +277,43 @@ export function AddRepositoryDialog({
         return t('repo.pickerUnsupported')
       case 'api_unavailable':
         return t('repo.serviceUnavailable')
+      case 'git_unavailable':
+        return t('repo.gitUnavailable')
       default:
         return t('repo.inspectFailed')
     }
   }
 
-  const applyInspection = (result: RepositoryInspection) => {
-    setInspection(result)
-    setPathInput(result.path)
-    setBranch(result.currentBranch)
+  const applyDiscovery = (result: RepositoryDiscovery) => {
     setError(null)
+    setPathInput(result.path)
+
+    const inspection = result.repositories[0]
+    if (result.isRepository && inspection) {
+      setRepository(inspection)
+      setFolder(null)
+      setSelectedPaths([])
+      setBranch(inspection.currentBranch)
+      return
+    }
+
+    setRepository(null)
+    setFolder(result)
+    setBranch('')
+    setSelectedPaths(
+      result.repositories
+        .map((entry) => entry.path)
+        .filter((path) => !existingPaths.includes(path)),
+    )
   }
 
   const chooseFolder = async () => {
     setBusy('picking')
     setError(null)
     try {
-      applyInspection(await pickRepositoryDirectory())
+      const path = await pickRepositoryFolder()
+      setBusy('inspecting')
+      applyDiscovery(await discoverRepositoryTarget(path))
     } catch (reason) {
       if (reason instanceof RepositoryApiError && reason.code === 'cancelled') {
         setError(null)
@@ -280,7 +334,7 @@ export function AddRepositoryDialog({
     setBusy('inspecting')
     setError(null)
     try {
-      applyInspection(await inspectRepositoryPath(pathInput))
+      applyDiscovery(await discoverRepositoryTarget(pathInput))
     } catch (reason) {
       setError(errorFor(reason))
     } finally {
@@ -288,10 +342,53 @@ export function AddRepositoryDialog({
     }
   }
 
+  const initialize = async () => {
+    if (!folder || busy !== 'idle') return
+    setBusy('initializing')
+    setError(null)
+    try {
+      const inspection = await initializeRepository(folder.path)
+      setRepository(inspection)
+      setFolder(null)
+      setSelectedPaths([])
+      setBranch(inspection.currentBranch)
+      setPathInput(inspection.path)
+    } catch (reason) {
+      const code = reason instanceof RepositoryApiError ? reason.code : 'unknown'
+      if (code === 'not_found') {
+        setError(t('repo.notFound'))
+      } else if (code === 'not_directory') {
+        setError(t('repo.notDirectory'))
+      } else if (code === 'git_unavailable') {
+        setError(t('repo.gitUnavailable'))
+      } else {
+        setError(t('repo.initFailed'))
+      }
+    } finally {
+      setBusy('idle')
+    }
+  }
+
+  const toggleRepository = (path: string) => {
+    setSelectedPaths((current) =>
+      current.includes(path)
+        ? current.filter((entry) => entry !== path)
+        : [...current, path],
+    )
+  }
+
+  const toggleAll = () => {
+    setSelectedPaths(
+      allSelected ? [] : availableRepositories.map((entry) => entry.path),
+    )
+  }
+
   const resetSelection = () => {
-    setInspection(null)
+    setRepository(null)
+    setFolder(null)
     setPathInput('')
     setBranch('')
+    setSelectedPaths([])
     setError(null)
   }
 
@@ -309,7 +406,7 @@ export function AddRepositoryDialog({
           {workspaceName}
         </div>
 
-        {!inspection ? (
+        {!repository && !folder ? (
           <div className="repo-picker">
             <button
               type="button"
@@ -318,7 +415,7 @@ export function AddRepositoryDialog({
               onClick={chooseFolder}
               disabled={busy !== 'idle'}
             >
-              {busy === 'picking' ? (
+              {busy === 'picking' || busy === 'inspecting' ? (
                 <LoaderCircle size={17} strokeWidth={2} className="is-spinning" />
               ) : (
                 <FolderOpen size={17} strokeWidth={1.9} />
@@ -326,7 +423,9 @@ export function AddRepositoryDialog({
               <span>
                 {busy === 'picking'
                   ? t('repo.pickingFolder')
-                  : t('repo.chooseFolder')}
+                  : busy === 'inspecting'
+                    ? t('repo.discovering')
+                    : t('repo.chooseFolder')}
               </span>
             </button>
 
@@ -362,15 +461,17 @@ export function AddRepositoryDialog({
             </form>
             <FieldError message={displayedError} />
           </div>
-        ) : (
+        ) : null}
+
+        {repository ? (
           <div className="repo-picked">
             <div className="repo-picked-heading">
               <span className="repo-picked-mark">
-                {inspection.name.charAt(0).toUpperCase()}
+                {repository.name.charAt(0).toUpperCase()}
               </span>
               <span className="repo-picked-copy">
-                <strong>{inspection.name}</strong>
-                <span>{inspection.path}</span>
+                <strong>{repository.name}</strong>
+                <span>{repository.path}</span>
               </span>
               <button
                 type="button"
@@ -388,36 +489,231 @@ export function AddRepositoryDialog({
               </div>
               <BranchSelect
                 variant="form"
-                branches={inspection.branches}
+                branches={repository.branches}
                 value={branch}
                 onChange={setBranch}
               />
             </div>
             <FieldError message={displayedError} />
           </div>
-        )}
+        ) : null}
+
+        {folder ? (
+          <div className="repo-picked">
+            <div className="repo-picked-heading">
+              <span className="repo-picked-mark">
+                {folder.name.charAt(0).toUpperCase()}
+              </span>
+              <span className="repo-picked-copy">
+                <strong>{folder.name}</strong>
+                <span>{folder.path}</span>
+              </span>
+              <button
+                type="button"
+                className="repo-change-folder"
+                onClick={resetSelection}
+              >
+                {t('repo.changeFolder')}
+              </button>
+            </div>
+
+            {folder.repositories.length > 0 ? (
+              <>
+                <div className="repo-folder-note">
+                  <span className="repo-folder-note-icon">
+                    <FolderGit2 size={16} strokeWidth={1.8} />
+                  </span>
+                  <span className="repo-folder-note-copy">
+                    <strong>{t('repo.notGit')}</strong>
+                    <span>
+                      {t(
+                        folder.repositories.length === 1
+                          ? 'repo.folderFoundOne'
+                          : 'repo.folderFoundMany',
+                        { count: folder.repositories.length },
+                      )}
+                    </span>
+                  </span>
+                </div>
+
+                <div className="repo-discovery">
+                  <div className="repo-discovery-toolbar">
+                    <span>{t('repo.selectRepositories')}</span>
+                    <button type="button" onClick={toggleAll}>
+                      {allSelected
+                        ? t('repo.deselectAll')
+                        : t('repo.selectAll')}
+                    </button>
+                  </div>
+
+                  <div
+                    className="repo-discovery-list"
+                    role="group"
+                    aria-label={t('repo.selectRepositories')}
+                  >
+                    {folder.repositories.map((entry) => {
+                      const added = existing.has(entry.path)
+                      const selected =
+                        !added && selectedPaths.includes(entry.path)
+                      return (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          role="checkbox"
+                          aria-checked={selected}
+                          disabled={added}
+                          className={`repo-discovery-row ${
+                            selected ? 'is-selected' : ''
+                          } ${added ? 'is-added' : ''}`}
+                          onClick={() => toggleRepository(entry.path)}
+                        >
+                          <span className="repo-discovery-check">
+                            {selected || added ? (
+                              <Check size={11} strokeWidth={2.8} />
+                            ) : null}
+                          </span>
+                          <span className="repo-discovery-copy">
+                            <span className="repo-discovery-name">
+                              <span className="repo-discovery-label">
+                                {entry.name}
+                              </span>
+                              {added ? (
+                                <span className="repo-discovery-added">
+                                  {t('repo.alreadyAdded')}
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="repo-discovery-path">
+                              {relativeToFolder(folder.path, entry.path)}
+                            </span>
+                          </span>
+                          <span className="repo-discovery-branch">
+                            <GitBranch size={10} strokeWidth={2} />
+                            {entry.currentBranch}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {folder.truncated ? (
+                    <span className="repo-discovery-hint">
+                      {t('repo.discoveryTruncated')}
+                    </span>
+                  ) : null}
+                </div>
+
+                <button
+                  type="button"
+                  className="repo-folder-init-link"
+                  onClick={() => void initialize()}
+                  disabled={busy !== 'idle'}
+                >
+                  {busy === 'initializing' ? (
+                    <LoaderCircle
+                      size={13}
+                      strokeWidth={2}
+                      className="is-spinning"
+                    />
+                  ) : (
+                    <GitBranchPlus size={13} strokeWidth={1.9} />
+                  )}
+                  {busy === 'initializing'
+                    ? t('repo.initializing')
+                    : t('repo.initInstead')}
+                </button>
+                <FieldError message={displayedError} />
+              </>
+            ) : (
+              <>
+                <div className="repo-folder-empty">
+                  <span className="repo-folder-empty-icon">
+                    <FolderGit2 size={21} strokeWidth={1.7} />
+                  </span>
+                  <strong>{t('repo.notGit')}</strong>
+                  <p>
+                    {folder.truncated
+                      ? t('repo.discoveryTruncated')
+                      : t('repo.folderEmpty')}
+                  </p>
+                  <small>{t('repo.initHint')}</small>
+                </div>
+                <FieldError message={displayedError} />
+              </>
+            )}
+          </div>
+        ) : null}
       </div>
+
       <footer className="manage-footer">
         <button type="button" className="manage-cancel" onClick={onClose}>
           {t('common.cancel')}
         </button>
-        <button
-          type="button"
-          className="manage-submit"
-          disabled={!inspection || duplicate || busy !== 'idle'}
-          onClick={() => {
-            if (!inspection) return
-            onConfirm({
-              name: inspection.name,
-              path: inspection.path,
-              branch: branch || inspection.currentBranch,
-              branches: inspection.branches,
-            })
-          }}
-        >
-          <FolderPlus size={13} strokeWidth={2} />
-          {t('repo.add')}
-        </button>
+
+        {repository ? (
+          <button
+            type="button"
+            className="manage-submit"
+            disabled={duplicate || busy !== 'idle'}
+            onClick={() =>
+              onConfirm({
+                repositories: [
+                  {
+                    name: repository.name,
+                    path: repository.path,
+                    branch: branch || repository.currentBranch,
+                    branches: repository.branches,
+                  },
+                ],
+              })
+            }
+          >
+            <FolderPlus size={13} strokeWidth={2} />
+            {t('repo.add')}
+          </button>
+        ) : null}
+
+        {folder && folder.repositories.length > 0 ? (
+          <button
+            type="button"
+            className="manage-submit"
+            disabled={selectedRepositories.length === 0 || busy !== 'idle'}
+            onClick={() =>
+              onConfirm({
+                group: { name: folder.name, path: folder.path },
+                repositories: selectedRepositories.map((entry) => ({
+                  name: entry.name,
+                  path: entry.path,
+                  branch: entry.currentBranch,
+                  branches: entry.branches,
+                })),
+              })
+            }
+          >
+            <FolderPlus size={13} strokeWidth={2} />
+            {selectedRepositories.length > 1
+              ? t('repo.addMany', { count: selectedRepositories.length })
+              : t('repo.add')}
+          </button>
+        ) : null}
+
+        {folder && folder.repositories.length === 0 ? (
+          <button
+            type="button"
+            className="manage-submit"
+            disabled={busy !== 'idle'}
+            onClick={() => void initialize()}
+          >
+            {busy === 'initializing' ? (
+              <LoaderCircle size={13} strokeWidth={2} className="is-spinning" />
+            ) : (
+              <GitBranchPlus size={13} strokeWidth={2} />
+            )}
+            {busy === 'initializing'
+              ? t('repo.initializing')
+              : t('repo.initHere')}
+          </button>
+        ) : null}
       </footer>
     </DialogFrame>
   )

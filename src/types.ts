@@ -23,11 +23,53 @@ export interface DiffFile {
   viewed?: boolean
 }
 
+export interface BlameLine {
+  line: number
+  author: string
+  authorMail: string
+  time: number
+  commit: string
+  summary: string
+  uncommitted: boolean
+}
+
+export interface RemoteBranch {
+  name: string
+  remote: string
+  branch: string
+}
+
+export interface RemoteInfo {
+  name: string
+  url: string
+}
+
+export type ConflictSide = 'ours' | 'theirs'
+
+export interface ConflictEntry {
+  path: string
+  kind: string
+  base: boolean
+  ours: boolean
+  theirs: boolean
+}
+
+export type ConflictSegment =
+  | { kind: 'common'; lines: string[] }
+  | {
+      kind: 'conflict'
+      ours: string[]
+      base: string[]
+      theirs: string[]
+      suggestion: ConflictSide | null
+    }
+
 export interface Project {
   id: string
   name: string
   path: string
   branch: string
+  currentBranch?: string
   ahead: number
   behind: number
   accent: string
@@ -35,13 +77,29 @@ export interface Project {
   updated: string
   files: DiffFile[]
   branches?: string[]
+  remoteBranches?: RemoteBranch[]
+  remotes?: RemoteInfo[]
+  upstream?: string | null
+  conflicts?: ConflictEntry[]
+  mergeInProgress?: boolean
   source?: 'demo' | 'local'
+  /** Folder group this repository was discovered in, if any. */
+  groupId?: string
+}
+
+/** A parent folder the user added to keep its sub-repositories together. */
+export interface ProjectGroup {
+  id: string
+  name: string
+  path: string
+  collapsed?: boolean
 }
 
 export interface Workspace {
   id: string
   name: string
   projects: Project[]
+  groups?: ProjectGroup[]
 }
 
 export interface SplitRow {
@@ -54,5 +112,5 @@ export type DiffRow =
   | { kind: 'line'; line: DiffLine }
 
 export type SplitDiffRow =
-  | { kind: 'hunk'; hunk: Hunk }
+  | { kind: 'hunk'; hunk: Hunk; hunkIndex: number }
   | { kind: 'split'; row: SplitRow }
