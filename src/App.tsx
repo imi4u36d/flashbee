@@ -1293,40 +1293,39 @@ export default function App() {
   return (
     <I18nProvider locale={locale}>
       <div className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
+        <Sidebar
+          ref={sidebarRef}
+          width={sidebarCollapsed ? 0 : sidebarWidth}
+          collapsed={sidebarCollapsed}
+          workspace={activeWorkspace}
+          workspaces={workspaces}
+          projects={workspaceProjects}
+          groups={activeWorkspace.groups ?? []}
+          activeProjectId={activeProject?.id ?? ''}
+          expandedProjectId={expandedProjectId}
+          selectedFile={activeFile?.path ?? null}
+          scanningGroupId={scanningGroupId}
+          onProjectClick={handleProjectClick}
+          onSelectFile={selectFile}
+          onSwitchWorkspace={queryForWorkspace}
+          onCreateWorkspace={openCreateWorkspace}
+          onRequestDeleteWorkspace={requestDeleteWorkspace}
+          onAddRepository={openAddRepository}
+          onQuickOpen={openPalette}
+          onCollapse={() => setSidebarCollapsed(true)}
+          onProjectContextMenu={handleProjectContextMenu}
+          onFileContextMenu={handleFileContextMenu}
+          onGroupContextMenu={handleGroupContextMenu}
+          onToggleGroup={toggleGroup}
+          onRescanGroup={rescanGroup}
+        />
         {!sidebarCollapsed && (
-          <>
-            <Sidebar
-              ref={sidebarRef}
-              width={sidebarWidth}
-              workspace={activeWorkspace}
-              workspaces={workspaces}
-              projects={workspaceProjects}
-              groups={activeWorkspace.groups ?? []}
-              activeProjectId={activeProject?.id ?? ''}
-              expandedProjectId={expandedProjectId}
-              selectedFile={activeFile?.path ?? null}
-              scanningGroupId={scanningGroupId}
-              onProjectClick={handleProjectClick}
-              onSelectFile={selectFile}
-              onSwitchWorkspace={queryForWorkspace}
-              onCreateWorkspace={openCreateWorkspace}
-              onRequestDeleteWorkspace={requestDeleteWorkspace}
-              onAddRepository={openAddRepository}
-              onQuickOpen={openPalette}
-              onCollapse={() => setSidebarCollapsed(true)}
-              onProjectContextMenu={handleProjectContextMenu}
-              onFileContextMenu={handleFileContextMenu}
-              onGroupContextMenu={handleGroupContextMenu}
-              onToggleGroup={toggleGroup}
-              onRescanGroup={rescanGroup}
-            />
-            <SidebarResizer
-              sidebarRef={sidebarRef}
-              label={t('sidebar.resize')}
-              onCommit={commitSidebarWidth}
-              onReset={resetSidebarWidth}
-            />
-          </>
+          <SidebarResizer
+            sidebarRef={sidebarRef}
+            label={t('sidebar.resize')}
+            onCommit={commitSidebarWidth}
+            onReset={resetSidebarWidth}
+          />
         )}
 
         <div className="app-main">

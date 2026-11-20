@@ -10,6 +10,7 @@ import {
   invokeNative,
   isNative,
   markNativeEnvironment,
+  watchFullscreen,
 } from './lib/native'
 import { applyBootSettings } from './lib/settings'
 
@@ -25,6 +26,7 @@ async function boot() {
   )
 
   if (isNative) {
+    watchFullscreen()
     installContextMenuPolicy()
     await invokeNative('app_ready').catch(() => undefined)
   }

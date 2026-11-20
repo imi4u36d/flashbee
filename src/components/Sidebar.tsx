@@ -33,6 +33,7 @@ import type { DiffFile, Project, ProjectGroup, Workspace } from '../types'
 interface SidebarProps {
   ref?: Ref<HTMLElement>
   width: number | null
+  collapsed?: boolean
   workspace: Workspace
   workspaces: Workspace[]
   projects: Project[]
@@ -200,6 +201,7 @@ function FileGroup({
 export function Sidebar({
   ref,
   width,
+  collapsed = false,
   workspace,
   workspaces,
   projects,
@@ -469,8 +471,9 @@ export function Sidebar({
   return (
     <aside
       ref={ref}
-      className="sidebar"
+      className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}
       style={width === null ? undefined : { width }}
+      inert={collapsed ? true : undefined}
     >
       <div className="sidebar-aurora" aria-hidden="true" />
 
