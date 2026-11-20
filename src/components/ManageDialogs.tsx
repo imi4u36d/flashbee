@@ -31,6 +31,7 @@ interface DialogFrameProps {
   iconTone?: 'amber' | 'danger'
   onClose: () => void
   wide?: boolean
+  large?: boolean
   children: ReactNode
 }
 
@@ -41,6 +42,7 @@ export function DialogFrame({
   iconTone = 'amber',
   onClose,
   wide = false,
+  large = false,
   children,
 }: DialogFrameProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -97,7 +99,7 @@ export function DialogFrame({
       />
       <div
         ref={dialogRef}
-        className={`manage-dialog ${wide ? 'is-wide' : ''}`}
+        className={`manage-dialog ${wide ? 'is-wide' : ''} ${large ? 'is-large' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="manage-dialog-title"

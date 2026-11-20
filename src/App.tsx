@@ -11,6 +11,7 @@ import {
   ConfirmRemoveDialog,
   CreateWorkspaceDialog,
 } from './components/ManageDialogs'
+import { PushDialog } from './components/PushDialog'
 import { RemoteDialog } from './components/RemoteDialog'
 import { RepoBar } from './components/RepoBar'
 import { SettingsModal } from './components/SettingsModal'
@@ -30,7 +31,6 @@ import {
   discoverRepositoryTarget,
   fetchRepositorySnapshot,
   pullRepository,
-  pushRepository,
   snapshotFiles,
 } from './lib/repositoryApi'
 import {
@@ -109,13 +109,14 @@ export default function App() {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [manageDialog, setManageDialog] = useState<ManageDialog>(null)
+  const [pushDialogOpen, setPushDialogOpen] = useState(false)
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const [systemDark, setSystemDark] = useState(systemPrefersDark)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(loadSidebarWidth)
   const sidebarRef = useRef<HTMLElement>(null)
   const [refreshing, setRefreshing] = useState(false)
-  const [syncing, setSyncing] = useState<'pull' | 'push' | null>(null)
+  const [syncing, setSyncing] = useState<'pull' | null>(null)
   const [merging, setMerging] = useState(false)
   const [resolverOpen, setResolverOpen] = useState(false)
   const [scanningGroupId, setScanningGroupId] = useState<string | null>(null)
@@ -548,29 +549,24 @@ export default function App() {
   }
 
   const handlePush = () => {
-    if (!activeProject || activeProject.source !== 'local' || syncing) return
-    const project = activeProject
-    setSyncing('push')
-    pushRepository(project.path)
-      .then(() => showToast('repo.pushed'))
-      .catch((reason) => {
-        const code = reason instanceof RepositoryApiError ? reason.code : ''
-        if (code === 'no_remote') {
-          showToast('repo.noRemote')
-        } else if (code === 'no_upstream') {
-          showToast('repo.noUpstream')
-        } else if (code === 'detached_head') {
-          showToast('repo.detachedHead')
-        } else {
-          showToast('repo.pushFailed', {
-            message: compactErrorMessage(reason) || t('repo.actionFailed'),
-          })
-        }
-      })
-      .finally(() => {
-        setSyncing(null)
-        void reloadProjectSnapshot(project).catch(() => undefined)
-      })
+    if (
+      !activeProject ||
+      activeProject.source !== 'local' ||
+      syncing ||
+      conflictCount > 0 ||
+      mergeInProgress
+    ) {
+      return
+    }
+    setPushDialogOpen(true)
+  }
+
+  const handlePushed = () => {
+    setPushDialogOpen(false)
+    showToast('repo.pushed')
+    if (activeProject?.source === 'local') {
+      void reloadProjectSnapshot(activeProject).catch(() => undefined)
+    }
   }
 
   const handleRemoteSaved = () => {
@@ -1190,6 +1186,13 @@ export default function App() {
         target instanceof HTMLTextAreaElement ||
         target?.isContentEditable
 
+      if (pushDialogOpen) {
+        if (event.key === 'Escape') {
+          setPushDialogOpen(false)
+        }
+        return
+      }
+
       if (manageDialog) {
         if (event.key === 'Escape') {
           setManageDialog(null)
@@ -1514,6 +1517,16 @@ export default function App() {
               onClose={() => setManageDialog(null)}
             />
           )}
+
+        {pushDialogOpen && activeProject && activeProject.source === 'local' && (
+          <PushDialog
+            projectName={activeProject.name}
+            repositoryPath={activeProject.path}
+            appTheme={resolvedTheme}
+            onPushed={handlePushed}
+            onClose={() => setPushDialogOpen(false)}
+          />
+        )}
 
         {manageDialog?.kind === 'abort-merge' && (
           <ConfirmRemoveDialog

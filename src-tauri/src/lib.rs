@@ -113,8 +113,28 @@ async fn pull_repository(path: String) -> Result<git::SyncOutcome, git::CommandE
 }
 
 #[tauri::command]
-async fn push_repository(path: String) -> Result<git::SyncOutcome, git::CommandError> {
-    tauri::async_runtime::spawn_blocking(move || git::push_repository(&path))
+async fn push_info(path: String) -> Result<git::PushInfo, git::CommandError> {
+    tauri::async_runtime::spawn_blocking(move || git::push_info(&path))
+        .await
+        .map_err(|error| git::CommandError::new("internal_error", error.to_string()))?
+}
+
+#[tauri::command]
+async fn commit_detail(
+    path: String,
+    revision: String,
+) -> Result<git::CommitDetail, git::CommandError> {
+    tauri::async_runtime::spawn_blocking(move || git::commit_detail(&path, &revision))
+        .await
+        .map_err(|error| git::CommandError::new("internal_error", error.to_string()))?
+}
+
+#[tauri::command]
+async fn push_repository(
+    path: String,
+    options: Option<git::PushOptions>,
+) -> Result<git::SyncOutcome, git::CommandError> {
+    tauri::async_runtime::spawn_blocking(move || git::push_repository(&path, options))
         .await
         .map_err(|error| git::CommandError::new("internal_error", error.to_string()))?
 }
@@ -280,6 +300,8 @@ pub fn run() {
             list_remotes,
             set_remote_url,
             pull_repository,
+            push_info,
+            commit_detail,
             push_repository,
             read_conflict,
             save_conflict_resolution,

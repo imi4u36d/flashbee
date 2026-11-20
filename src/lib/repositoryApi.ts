@@ -52,6 +52,51 @@ export interface SyncOutcome {
   conflicts: string[]
 }
 
+export interface PushCommit {
+  hash: string
+  shortHash: string
+  subject: string
+  author: string
+  email: string
+  time: number
+}
+
+export interface PushInfo {
+  branch: string
+  remote: string
+  remoteBranch: string
+  upstream: string | null
+  base: string | null
+  ahead: number
+  behind: number
+  commits: PushCommit[]
+  commitsTotal: number
+  tags: string[]
+}
+
+export interface CommitDetail {
+  hash: string
+  shortHash: string
+  subject: string
+  body: string
+  author: string
+  email: string
+  time: number
+  files: DiffFile[]
+  fileCount: number
+  truncated: boolean
+}
+
+export interface PushOptions {
+  commit?: string | null
+  remote?: string | null
+  remoteBranch?: string | null
+  force?: boolean
+  pushTags?: boolean
+  skipCommits?: boolean
+  tag?: string | null
+}
+
 export interface ConflictDetail {
   path: string
   language: string
@@ -197,9 +242,29 @@ export function pullRepository(repositoryPath: string): Promise<SyncOutcome> {
   })
 }
 
-export function pushRepository(repositoryPath: string): Promise<SyncOutcome> {
+export function fetchPushInfo(repositoryPath: string): Promise<PushInfo> {
+  return nativeRequest<PushInfo>('push_info', {
+    path: repositoryPath,
+  })
+}
+
+export function fetchCommitDetail(
+  repositoryPath: string,
+  revision: string,
+): Promise<CommitDetail> {
+  return nativeRequest<CommitDetail>('commit_detail', {
+    path: repositoryPath,
+    revision,
+  })
+}
+
+export function pushRepository(
+  repositoryPath: string,
+  options?: PushOptions,
+): Promise<SyncOutcome> {
   return nativeRequest<SyncOutcome>('push_repository', {
     path: repositoryPath,
+    options: options ?? null,
   })
 }
 

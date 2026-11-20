@@ -27,7 +27,7 @@ interface RepoBarProps {
   workspaceName: string
   sidebarCollapsed: boolean
   refreshing: boolean
-  syncing?: 'pull' | 'push' | null
+  syncing?: 'pull' | null
   conflictCount?: number
   mergeInProgress?: boolean
   onOpenSidebar: () => void
@@ -333,13 +333,8 @@ export function RepoBar({
             disabled={syncDisabled}
             title={pushTitle}
             aria-label={t('repo.push')}
-            aria-busy={syncing === 'push'}
           >
-            {syncing === 'push' ? (
-              <LoaderCircle size={15} strokeWidth={2} className="is-spinning" />
-            ) : (
-              <ArrowUpFromLine size={15} strokeWidth={1.8} />
-            )}
+            <ArrowUpFromLine size={15} strokeWidth={1.8} />
           </button>
         </div>
       )}

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -142,6 +142,65 @@ pub struct ConflictEntry {
 pub struct SyncOutcome {
     pub message: String,
     pub conflicts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushCommitInfo {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+    pub email: String,
+    pub time: i64,
+}
+
+/// Everything the push dialog needs before the first click: the commits that
+/// would land on the remote, the tags that can be pushed, and how far the
+/// local branch has drifted from its remote counterpart.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushInfo {
+    pub branch: String,
+    pub remote: String,
+    pub remote_branch: String,
+    pub upstream: Option<String>,
+    pub base: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub commits: Vec<PushCommitInfo>,
+    pub commits_total: u32,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDetail {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub body: String,
+    pub author: String,
+    pub email: String,
+    pub time: i64,
+    pub files: Vec<RepositoryFile>,
+    pub file_count: u32,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PushOptions {
+    /// Newest commit to publish. `None` pushes the current branch as-is.
+    pub commit: Option<String>,
+    pub remote: Option<String>,
+    pub remote_branch: Option<String>,
+    pub force: bool,
+    pub push_tags: bool,
+    /// Push only tags and leave the branch untouched.
+    pub skip_commits: bool,
+    /// Push a single tag instead of every tag when `push_tags` is set.
+    pub tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1277,7 +1336,110 @@ pub fn pull_repository(input_path: &str) -> Result<SyncOutcome, CommandError> {
     }
 }
 
-pub fn push_repository(input_path: &str) -> Result<SyncOutcome, CommandError> {
+fn preferred_remote(inspection: &RepositoryInspection) -> String {
+    inspection
+        .remotes
+        .iter()
+        .find(|remote| remote.name == "origin")
+        .or_else(|| inspection.remotes.first())
+        .map(|remote| remote.name.clone())
+        .unwrap_or_else(|| "origin".to_string())
+}
+
+fn split_remote_ref(value: &str) -> Option<(String, String)> {
+    let (remote, branch) = value.split_once('/')?;
+    if remote.is_empty() || branch.is_empty() {
+        return None;
+    }
+    Some((remote.to_string(), branch.to_string()))
+}
+
+fn remote_tracking_ref_exists(root: &Path, remote: &str, branch: &str) -> bool {
+    let reference = format!("refs/remotes/{remote}/{branch}");
+    run_git(
+        &["rev-parse", "--verify", "--quiet", reference.as_str()],
+        root,
+    )
+    .is_ok()
+}
+
+/// The ref the local branch is compared against. Upstream wins; otherwise use
+/// the remote branch with the same name, the remote HEAD, or its default
+/// branch. `None` means the remote is empty and every commit is new.
+fn push_base(
+    root: &Path,
+    upstream: Option<&str>,
+    remote: &str,
+    remote_branch: &str,
+) -> Option<String> {
+    if let Some(upstream) = upstream {
+        return Some(upstream.to_string());
+    }
+    if remote_tracking_ref_exists(root, remote, remote_branch) {
+        return Some(format!("{remote}/{remote_branch}"));
+    }
+    if remote_tracking_ref_exists(root, remote, "HEAD") {
+        return Some(format!("{remote}/HEAD"));
+    }
+    for fallback in ["main", "master"] {
+        if remote_tracking_ref_exists(root, remote, fallback) {
+            return Some(format!("{remote}/{fallback}"));
+        }
+    }
+    None
+}
+
+fn read_push_commits(
+    root: &Path,
+    base: Option<&str>,
+    limit: u32,
+) -> Result<(Vec<PushCommitInfo>, u32), CommandError> {
+    let range = base.map(|value| format!("{value}..HEAD"));
+    let count_target = range.as_deref().unwrap_or("HEAD");
+    let total = run_git(&["rev-list", "--count", count_target], root)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+
+    let limit_value = limit.to_string();
+    let mut args = vec![
+        "log",
+        "--format=%H%x00%h%x00%an%x00%ae%x00%at%x00%s%x00%x1e",
+        "-n",
+        limit_value.as_str(),
+    ];
+    if let Some(range) = range.as_deref() {
+        args.push(range);
+    } else {
+        args.push("HEAD");
+    }
+
+    let raw = run_git(&args, root)?;
+    let mut commits = Vec::new();
+    for record in raw.split('\x1e') {
+        let record = record.trim_start_matches(|value| value == '\n' || value == '\r');
+        if record.is_empty() {
+            continue;
+        }
+        let mut fields = record.split('\0');
+        let hash = fields.next().unwrap_or("").trim();
+        if hash.is_empty() {
+            continue;
+        }
+        commits.push(PushCommitInfo {
+            hash: hash.to_string(),
+            short_hash: fields.next().unwrap_or("").trim().to_string(),
+            author: fields.next().unwrap_or("").trim().to_string(),
+            email: fields.next().unwrap_or("").trim().to_string(),
+            time: fields.next().unwrap_or("").trim().parse().unwrap_or(0),
+            subject: fields.next().unwrap_or("").trim().to_string(),
+        });
+    }
+
+    Ok((commits, total))
+}
+
+pub fn push_info(input_path: &str) -> Result<PushInfo, CommandError> {
     let (root, inspection) = inspect_repository_root(input_path)?;
 
     if inspection.remotes.is_empty() {
@@ -1293,33 +1455,381 @@ pub fn push_repository(input_path: &str) -> Result<SyncOutcome, CommandError> {
         ));
     }
 
-    let output = if inspection.upstream.is_some() {
-        run_git_capture(&["push"], &root, GIT_NETWORK_ENV)?
-    } else {
-        let remote = inspection
-            .remotes
-            .iter()
-            .find(|remote| remote.name == "origin")
-            .or_else(|| inspection.remotes.first())
-            .map(|remote| remote.name.clone())
-            .unwrap_or_else(|| "origin".to_string());
-        run_git_capture(
+    let upstream_parts = inspection.upstream.as_deref().and_then(split_remote_ref);
+    let (remote, remote_branch) = match upstream_parts {
+        Some((remote, branch)) => (remote, branch),
+        None => (
+            preferred_remote(&inspection),
+            inspection.current_branch.clone(),
+        ),
+    };
+    let base = push_base(
+        &root,
+        inspection.upstream.as_deref(),
+        &remote,
+        &remote_branch,
+    );
+    let (ahead, behind) = base
+        .as_deref()
+        .map(|value| read_ahead_behind(&root, value))
+        .unwrap_or((0, 0));
+    let (commits, commits_total) = read_push_commits(&root, base.as_deref(), 500)?;
+    let tags = run_git(&["tag", "--list"], &root)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect();
+
+    Ok(PushInfo {
+        branch: inspection.current_branch,
+        remote,
+        remote_branch,
+        upstream: inspection.upstream,
+        base,
+        ahead,
+        behind,
+        commits,
+        commits_total,
+        tags,
+    })
+}
+
+fn is_revision_token(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 64
+        && trimmed.chars().all(|character| character.is_ascii_hexdigit())
+}
+
+fn read_first_parent(root: &Path, revision: &str) -> Option<String> {
+    let raw = run_git(&["rev-list", "--parents", "-n", "1", revision], root).ok()?;
+    raw.split_whitespace().nth(1).map(str::to_string)
+}
+
+fn read_commit_statuses(
+    root: &Path,
+    revision: &str,
+    parent: Option<&str>,
+) -> HashMap<String, ChangeStatus> {
+    let raw = if let Some(parent) = parent {
+        run_git(
             &[
-                "push",
-                "-u",
-                remote.as_str(),
-                inspection.current_branch.as_str(),
+                "-c",
+                "core.quotePath=false",
+                "diff",
+                "--name-status",
+                "--find-renames",
+                parent,
+                revision,
+            ],
+            root,
+        )
+    } else {
+        run_git(
+            &[
+                "-c",
+                "core.quotePath=false",
+                "show",
+                "--format=",
+                "--name-status",
+                "--find-renames",
+                revision,
+            ],
+            root,
+        )
+    }
+    .unwrap_or_default();
+
+    let mut statuses = HashMap::new();
+    for line in raw.lines() {
+        let mut fields = line.split('\t');
+        let Some(code) = fields.next() else {
+            continue;
+        };
+        let Some(first_path) = fields.next() else {
+            continue;
+        };
+        let second_path = fields.next();
+        let status = match code.chars().next() {
+            Some('A') | Some('C') => ChangeStatus::Added,
+            Some('D') => ChangeStatus::Deleted,
+            Some('R') => ChangeStatus::Renamed,
+            _ => ChangeStatus::Modified,
+        };
+        let path = if matches!(status, ChangeStatus::Renamed) {
+            second_path.unwrap_or(first_path)
+        } else {
+            first_path
+        };
+        statuses.insert(path.to_string(), status);
+    }
+    statuses
+}
+
+pub fn commit_detail(input_path: &str, revision: &str) -> Result<CommitDetail, CommandError> {
+    let revision = revision.trim();
+    if !is_revision_token(revision) {
+        return Err(CommandError::new(
+            "bad_revision",
+            "The selected commit is not valid.",
+        ));
+    }
+    let root = repository_root(input_path)?;
+
+    let meta = run_git(
+        &[
+            "show",
+            "-s",
+            "--format=%H%x00%h%x00%an%x00%ae%x00%at%x00%s%x00%b",
+            revision,
+        ],
+        &root,
+    )?;
+    let mut fields = meta.trim_start_matches('\n').split('\0');
+    let hash = fields.next().unwrap_or("").trim().to_string();
+    if hash.is_empty() {
+        return Err(CommandError::new(
+            "bad_revision",
+            "The selected commit could not be read.",
+        ));
+    }
+    let short_hash = fields.next().unwrap_or("").trim().to_string();
+    let author = fields.next().unwrap_or("").trim().to_string();
+    let email = fields.next().unwrap_or("").trim().to_string();
+    let time = fields.next().unwrap_or("").trim().parse().unwrap_or(0);
+    let subject = fields.next().unwrap_or("").trim().to_string();
+    let body = fields.next().unwrap_or("").trim().to_string();
+
+    let parent = read_first_parent(&root, &hash);
+    let statuses = read_commit_statuses(&root, &hash, parent.as_deref());
+    let diff = if let Some(parent) = parent.as_deref() {
+        run_git(
+            &[
+                "-c",
+                "core.quotePath=false",
+                "diff",
+                parent,
+                hash.as_str(),
+                "--no-color",
+                "--no-ext-diff",
+                "--unified=3",
+                "--find-renames",
             ],
             &root,
-            GIT_NETWORK_ENV,
-        )?
-    };
+        )
+    } else {
+        run_git(
+            &[
+                "-c",
+                "core.quotePath=false",
+                "show",
+                "--format=",
+                "--no-color",
+                "--no-ext-diff",
+                "--unified=3",
+                "--find-renames",
+                hash.as_str(),
+            ],
+            &root,
+        )
+    }
+    .unwrap_or_default();
 
+    let mut files: Vec<RepositoryFile> = parse_diff_sections(&diff)
+        .into_iter()
+        .map(|section| {
+            let status = statuses
+                .get(section.path.as_str())
+                .cloned()
+                .unwrap_or(ChangeStatus::Modified);
+            RepositoryFile {
+                path: section.path.clone(),
+                status,
+                language: language_for_path(&section.path),
+                staged: false,
+                hunks: section.hunks,
+            }
+        })
+        .collect();
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let file_count = files.len() as u32;
+    const MAX_COMMIT_FILES: usize = 120;
+    let truncated = files.len() > MAX_COMMIT_FILES;
+    files.truncate(MAX_COMMIT_FILES);
+
+    Ok(CommitDetail {
+        hash,
+        short_hash,
+        subject,
+        body,
+        author,
+        email,
+        time,
+        files,
+        file_count,
+        truncated,
+    })
+}
+
+pub fn push_repository(
+    input_path: &str,
+    options: Option<PushOptions>,
+) -> Result<SyncOutcome, CommandError> {
+    let (root, inspection) = inspect_repository_root(input_path)?;
+
+    if inspection.remotes.is_empty() {
+        return Err(CommandError::new(
+            "no_remote",
+            "This repository has no remote configured.",
+        ));
+    }
+    if inspection.current_branch.is_empty() || inspection.current_branch == "HEAD" {
+        return Err(CommandError::new(
+            "detached_head",
+            "A detached HEAD cannot be pushed.",
+        ));
+    }
+
+    let options = options.unwrap_or_default();
+    let upstream_parts = inspection.upstream.as_deref().and_then(split_remote_ref);
+    let remote = options
+        .remote
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .filter(|name| inspection.remotes.iter().any(|entry| entry.name == *name))
+        .map(str::to_string)
+        .or_else(|| upstream_parts.as_ref().map(|(name, _)| name.clone()))
+        .unwrap_or_else(|| preferred_remote(&inspection));
+    let remote_branch = options
+        .remote_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .or_else(|| upstream_parts.as_ref().map(|(_, branch)| branch.clone()))
+        .unwrap_or_else(|| inspection.current_branch.clone());
+
+    let selected_commit = options
+        .commit
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(commit) = selected_commit {
+        if !options.skip_commits {
+            if !is_revision_token(commit) {
+                return Err(CommandError::new(
+                    "bad_revision",
+                    "The selected commit is not valid.",
+                ));
+            }
+            let ancestor = run_git_capture(
+                &["merge-base", "--is-ancestor", commit, "HEAD"],
+                &root,
+                &[],
+            )?;
+            if !ancestor.success {
+                return Err(CommandError::new(
+                    "bad_revision",
+                    "The selected commit is not part of the current branch.",
+                ));
+            }
+        }
+    }
+
+    let tag = if options.push_tags {
+        options
+            .tag
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    } else {
+        None
+    };
+    if options.push_tags {
+        if let Some(tag) = tag {
+            let reference = format!("refs/tags/{tag}");
+            let valid = run_git_capture(
+                &["check-ref-format", reference.as_str()],
+                &root,
+                &[],
+            )?
+            .success;
+            if !valid {
+                return Err(CommandError::new(
+                    "bad_tag",
+                    "The selected tag is not valid.",
+                ));
+            }
+        }
+    }
+
+    let mut args: Vec<String> = vec!["push".to_string()];
+    if options.force {
+        args.push("--force-with-lease".to_string());
+    }
+    if options.push_tags && tag.is_none() {
+        args.push("--tags".to_string());
+    }
+
+    let mut pushes_refs = false;
+    let mut remote_selected = false;
+
+    if !options.skip_commits {
+        if let Some(commit) = selected_commit {
+            args.push(remote.clone());
+            args.push(format!("{commit}:refs/heads/{remote_branch}"));
+        } else if inspection.upstream.is_none() {
+            args.push("-u".to_string());
+            args.push(remote.clone());
+            args.push(inspection.current_branch.clone());
+        } else {
+            args.push(remote.clone());
+        }
+        remote_selected = true;
+        pushes_refs = true;
+    }
+
+    if let Some(tag) = tag {
+        if !remote_selected {
+            args.push(remote.clone());
+        }
+        args.push(format!("refs/tags/{tag}"));
+        pushes_refs = true;
+    } else if options.push_tags {
+        if !remote_selected {
+            args.push(remote.clone());
+        }
+        pushes_refs = true;
+    }
+
+    if !pushes_refs {
+        return Ok(SyncOutcome {
+            message: "Nothing to push.".to_string(),
+            conflicts: Vec::new(),
+        });
+    }
+
+    let git_args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let output = run_git_capture(&git_args, &root, GIT_NETWORK_ENV)?;
     if !output.success {
         return Err(CommandError::new(
             "push_failed",
             error_detail(&output, "Git could not push to the remote."),
         ));
+    }
+
+    // `sha:branch` refspecs cannot set upstream tracking themselves. Link the
+    // branch once the remote counterpart exists so the next pull/push just works.
+    if !options.skip_commits
+        && inspection.upstream.is_none()
+        && remote_branch == inspection.current_branch
+    {
+        let tracking = format!("--set-upstream-to={remote}/{remote_branch}");
+        let _ = run_git_capture(&["branch", tracking.as_str()], &root, &[]);
     }
 
     Ok(SyncOutcome {
@@ -1810,12 +2320,11 @@ pub fn blame_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        complete_merge, conflict_entries, conflict_kind, discover_repositories,
+        commit_detail, complete_merge, conflict_entries, conflict_kind, discover_repositories,
         initialize_repository, inspect_root, list_remotes, parse_blame, parse_conflict_markers,
-        pull_repository, push_repository, read_conflict, resolve_conflict_side,
-        save_conflict_resolution,
-        scan_repositories, set_remote_url, should_skip_directory, suggested_side, ConflictSegment,
-        ConflictSide,
+        pull_repository, push_info, push_repository, read_conflict, resolve_conflict_side,
+        save_conflict_resolution, scan_repositories, set_remote_url, should_skip_directory,
+        suggested_side, ConflictSegment, ConflictSide, PushOptions,
     };
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -2071,7 +2580,7 @@ mod tests {
         assert_eq!(remotes[0].name, "origin");
 
         // No upstream yet: push establishes it and uploads main.
-        let pushed = push_repository(repository.to_str().unwrap()).unwrap();
+        let pushed = push_repository(repository.to_str().unwrap(), None).unwrap();
         assert!(pushed.conflicts.is_empty());
         let inspection = inspect_root(&repository, true).unwrap();
         assert_eq!(inspection.upstream.as_deref(), Some("origin/main"));
@@ -2216,6 +2725,90 @@ mod tests {
         assert!(conflict_entries(&repository).unwrap().is_empty());
         assert!(!repository.join("file.txt").exists());
         complete_merge(repository.to_str().unwrap()).unwrap();
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn describes_and_selectively_pushes_commits_and_tags() {
+        let root = temp_root("push-dialog");
+        let remote = root.join("origin.git");
+        let repository = root.join("repository");
+        fs::create_dir_all(&remote).unwrap();
+        fs::create_dir_all(&repository).unwrap();
+
+        git_in(&remote, &["init", "--bare", "-b", "main"]);
+        git_in(&repository, &["init", "-b", "main"]);
+        configure_user(&repository);
+        commit_file(&repository, "base.txt", "base\n", "base");
+        git_in(
+            &repository,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git_in(&repository, &["push", "-u", "origin", "main"]);
+
+        commit_file(&repository, "second.txt", "second\n", "second");
+        commit_file(&repository, "third.txt", "third\n", "third");
+        git_in(&repository, &["tag", "v1"]);
+
+        let path = repository.to_str().unwrap();
+        let info = push_info(path).unwrap();
+        assert_eq!(info.remote, "origin");
+        assert_eq!(info.remote_branch, "main");
+        assert_eq!(info.ahead, 2);
+        assert_eq!(info.commits.len(), 2);
+        assert_eq!(info.commits[0].subject, "third");
+        assert!(info.tags.iter().any(|tag| tag == "v1"));
+
+        let detail = commit_detail(path, &info.commits[0].hash).unwrap();
+        assert_eq!(detail.subject, "third");
+        assert!(detail
+            .files
+            .iter()
+            .any(|file| file.path == "third.txt"));
+
+        let remote_head = git_in(&remote, &["rev-parse", "main"]);
+
+        // Pushing only a tag must leave the remote branch untouched.
+        push_repository(
+            path,
+            Some(PushOptions {
+                push_tags: true,
+                skip_commits: true,
+                tag: Some("v1".to_string()),
+                ..PushOptions::default()
+            }),
+        )
+        .unwrap();
+        assert_eq!(git_in(&remote, &["rev-parse", "main"]), remote_head);
+        assert_eq!(
+            git_in(&remote, &["rev-parse", "refs/tags/v1"]),
+            git_in(&repository, &["rev-parse", "refs/tags/v1"])
+        );
+
+        // Pushing the older selected commit moves the remote to that commit.
+        let selected = info.commits[1].hash.clone();
+        push_repository(
+            path,
+            Some(PushOptions {
+                commit: Some(selected.clone()),
+                ..PushOptions::default()
+            }),
+        )
+        .unwrap();
+        assert_eq!(git_in(&remote, &["rev-parse", "main"]), selected);
+
+        let remaining = push_info(path).unwrap();
+        assert_eq!(remaining.commits.len(), 1);
+        assert_eq!(remaining.commits[0].subject, "third");
+
+        // A normal push publishes the tip and clears the ahead count.
+        push_repository(path, None).unwrap();
+        assert_eq!(
+            git_in(&remote, &["rev-parse", "main"]),
+            git_in(&repository, &["rev-parse", "HEAD"])
+        );
+        assert_eq!(push_info(path).unwrap().ahead, 0);
 
         fs::remove_dir_all(&root).unwrap();
     }

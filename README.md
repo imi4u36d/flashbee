@@ -24,8 +24,9 @@ is preserved in [`demo/`](demo/README.md) as a runnable reference.
 - Hover any diff line to see its author, relative commit time, hash, and commit summary
 - Branch comparison is read-only: pick a local or remote-tracking branch to diff the
   working tree against it
-- Pull and push from the repository toolbar, with upstream tracking and ahead/behind
-  counts; configure or update remote URLs without leaving the app
+- Pull from the repository toolbar; pushing opens a commit review dialog with per-commit
+  diffs, selective commits, tag pushes, and `--force-with-lease`, with upstream tracking
+  and ahead/behind counts; configure or update remote URLs without leaving the app
 - Merge conflict resolver with side-by-side and unified views: resolve each conflict
   left or right, take an entire side, or quick-merge every conflict where only one side
   changed. Resolved files are staged, and the merge can be completed or aborted
