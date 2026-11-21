@@ -107,21 +107,25 @@ export function RepoBar({
   }, [actionsOpen])
 
   return (
-    <header className="repo-bar" data-tauri-drag-region="deep">
+    <header
+      className={`repo-bar ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}
+      data-tauri-drag-region="deep"
+    >
       <div
         className="repo-identity"
         onContextMenu={project ? onContextMenu : undefined}
       >
-        {sidebarCollapsed && (
-          <button
-            className="icon-button subtle open-sidebar-button"
-            onClick={onOpenSidebar}
-            title={`${t('repo.openSidebar')}  ⌘\\`}
-            aria-label={t('repo.openSidebar')}
-          >
-            <PanelLeft size={16} strokeWidth={1.8} />
-          </button>
-        )}
+        <button
+          className="icon-button subtle open-sidebar-button"
+          onClick={onOpenSidebar}
+          title={`${t('repo.openSidebar')}  ⌘\\`}
+          aria-label={t('repo.openSidebar')}
+          aria-hidden={!sidebarCollapsed}
+          tabIndex={sidebarCollapsed ? 0 : -1}
+          inert={!sidebarCollapsed}
+        >
+          <PanelLeft size={16} strokeWidth={1.8} />
+        </button>
         <span
           className="repo-mark"
           style={

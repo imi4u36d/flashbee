@@ -3,13 +3,13 @@
   --font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono Variable', 'SFMono-Regular', Consolas, monospace;
   --code-size: 16px;
-  --motion-quick: 120ms;
-  --motion-fast: 160ms;
-  --motion-base: 220ms;
-  --motion-slow: 380ms;
-  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-spring: cubic-bezier(0.34, 1.35, 0.64, 1);
+  --motion-quick: 100ms;
+  --motion-fast: 140ms;
+  --motion-base: 180ms;
+  --motion-panel: 220ms;
+  /* Native surfaces decelerate into place; they never overshoot. */
+  --ease-standard: cubic-bezier(0.25, 0.1, 0.25, 1);
+  --ease-out-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   --bg: #0b1219;
   --bg-deep: #090f16;
@@ -245,7 +245,6 @@ kbd {
   display: flex;
   flex: none;
   flex-direction: column;
-  width: 304px;
   min-height: 0;
   overflow: hidden;
   border-right: 1px solid var(--border);
@@ -451,10 +450,9 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   border: 1px solid transparent;
   border-radius: 9px;
   transition:
-    border-color 160ms ease,
-    background-color 160ms ease,
-    box-shadow 160ms ease,
-    margin 160ms ease;
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .project-card.is-active:not(.is-expanded) {
@@ -465,7 +463,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   /* `clip` (unlike `hidden`) keeps the header sticky and still clips to the
      card's rounded corners on modern engines. */
   overflow: visible;
-  margin-bottom: 7px;
   border-color: #242d36;
   background: linear-gradient(180deg, #151c23 0%, #11181f 100%);
   box-shadow:
@@ -495,10 +492,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   padding: 8px 8px;
   border-radius: 8px;
   text-align: left;
-}
-
-.project-card.is-expanded .project-header {
-  padding-bottom: 7px;
 }
 
 .project-header:hover {
@@ -803,15 +796,11 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
 .project-files-reveal {
   display: grid;
   grid-template-rows: 0fr;
-  opacity: 0;
-  transition:
-    grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 170ms ease;
+  transition: grid-template-rows var(--motion-base) var(--ease-out-soft);
 }
 
 .project-files-reveal.is-open {
   grid-template-rows: 1fr;
-  opacity: 1;
 }
 
 .project-files-clip {
@@ -1063,7 +1052,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   border-radius: 50%;
   background: #6fc590;
   box-shadow: 0 0 0 3px rgba(111, 197, 144, 0.055);
-  animation: watchPulse 3s ease-in-out infinite;
 }
 
 .watch-latency {
@@ -1096,8 +1084,34 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   min-width: 0;
 }
 
+/* Mounted in both states so toggling the sidebar never inserts a control and
+   shifts the toolbar by a whole button in a single frame. */
 .open-sidebar-button {
+  width: 0;
+  margin-right: -9px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    width var(--motion-panel) var(--ease-out-soft),
+    margin-left var(--motion-panel) var(--ease-out-soft),
+    margin-right var(--motion-panel) var(--ease-out-soft),
+    opacity var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    filter var(--motion-fast) var(--ease-standard);
+}
+
+.repo-bar.is-sidebar-collapsed .open-sidebar-button {
+  width: 26px;
   margin-left: -4px;
+  margin-right: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.repo-bar.is-sidebar-collapsed .open-sidebar-button:active {
+  filter: brightness(0.9);
 }
 
 .repo-mark {
@@ -1623,6 +1637,8 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
 }
 
 .hunk-header {
+  position: relative;
+  isolation: isolate;
   display: flex;
   grid-column: 1 / -1;
   align-items: stretch;
@@ -1756,7 +1772,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
     0 16px 40px rgba(0, 0, 0, 0.45),
     inset 0 1px 0 rgba(236, 242, 251, 0.04);
   pointer-events: none;
-  animation: blameFade 130ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .blame-popover.is-above {
@@ -1855,15 +1871,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   color: #7b8692;
   font-size: 0.65rem;
   line-height: 1.45;
-}
-
-@keyframes blameFade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
 }
 
 .diff-footer {
@@ -2037,7 +2044,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   height: 125px;
   border-radius: 50%;
   transform: translate(-50%, -50%);
-  animation: orbit 14s linear infinite;
 }
 
 .clean-orbit span {
@@ -2054,7 +2060,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
 .clean-orbit-two {
   width: 151px;
   height: 151px;
-  animation: orbitReverse 21s linear infinite;
 }
 
 .clean-orbit-two span {
@@ -2202,7 +2207,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   background: rgba(3, 5, 8, 0.62);
   backdrop-filter: blur(8px);
   cursor: default;
-  animation: fadeIn 130ms ease both;
+  animation: fadeIn var(--motion-fast) var(--ease-out-soft) both;
 }
 
 .command-palette {
@@ -2219,7 +2224,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
     0 32px 90px rgba(0, 0, 0, 0.58),
     0 0 0 1px rgba(0, 0, 0, 0.25),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  animation: paletteDrop 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .command-palette::before {
@@ -2570,7 +2575,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   box-shadow:
     0 18px 45px rgba(0, 0, 0, 0.42),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  animation: toastIn 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fadeIn var(--motion-fast) var(--ease-out-soft) both;
 }
 
 .toast svg {
@@ -2586,38 +2591,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   }
 }
 
-@keyframes watchPulse {
-  0%,
-  100% {
-    opacity: 0.7;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes revealFiles {
-  from {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes panelSlideIn {
-  from {
-    opacity: 0;
-    transform: translateX(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -2627,51 +2600,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   }
 }
 
-@keyframes paletteDrop {
-  from {
-    opacity: 0;
-    transform: translateY(-7px) scale(0.992);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes toastIn {
-  from {
-    opacity: 0;
-    transform: translateY(7px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes orbit {
-  from {
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-  to {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-}
-
-@keyframes orbitReverse {
-  from {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-  to {
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-}
-
 /* ── Typography refinement ───────────────────────────────────────── */
-
-.sidebar {
-  width: 312px;
-}
 
 .workspace-copy strong {
   font-size: 0.8438rem;
@@ -3028,7 +2957,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   background: rgba(3, 5, 8, 0.68);
   backdrop-filter: blur(12px) saturate(0.8);
   cursor: default;
-  animation: fadeIn 160ms ease both;
+  animation: fadeIn var(--motion-fast) var(--ease-out-soft) both;
 }
 
 .settings-modal {
@@ -3047,7 +2976,7 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
     0 38px 110px rgba(0, 0, 0, 0.62),
     0 0 0 1px rgba(0, 0, 0, 0.25),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  animation: settingsIn 230ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fadeIn var(--motion-fast) var(--ease-out-soft) both;
 }
 
 .settings-modal::before {
@@ -3190,16 +3119,14 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   background: #131a22;
   text-align: left;
   transition:
-    transform 170ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-color 170ms ease,
-    background-color 170ms ease,
-    box-shadow 170ms ease;
+    border-color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .theme-option:hover {
   border-color: #38424c;
   background: #171e26;
-  transform: translateY(-1px);
 }
 
 .theme-option.is-selected {
@@ -3417,16 +3344,12 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   background: var(--amber);
   color: #18212a;
   opacity: 0;
-  transform: scale(0.72);
-  transition:
-    opacity 150ms ease,
-    transform 150ms ease;
+  transition: opacity var(--motion-quick) var(--ease-standard);
   box-shadow: 0 2px 7px rgba(0, 0, 0, 0.2);
 }
 
 .theme-option.is-selected .theme-check {
   opacity: 1;
-  transform: scale(1);
 }
 
 .settings-row {
@@ -3608,11 +3531,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   box-shadow:
     0 0 0 1px rgba(251, 186, 99, 0.42),
     0 2px 7px rgba(0, 0, 0, 0.3);
-  transition: transform 120ms ease;
-}
-
-.size-control input[type='range']:active::-webkit-slider-thumb {
-  transform: scale(1.12);
 }
 
 .size-control input[type='range']::-moz-range-track {
@@ -3686,7 +3604,6 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   line-height: 1.7;
   letter-spacing: -0.12px;
   white-space: pre;
-  transition: font-size 160ms ease;
 }
 
 .tok-comment {
@@ -3804,34 +3721,22 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   filter: brightness(1.05);
 }
 
-@keyframes settingsIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px) scale(0.986);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 /* Smooth fallback for browsers without the View Transitions API. */
 html.theme-transition *,
 html.theme-transition *::before,
 html.theme-transition *::after {
   transition:
-    color 230ms ease,
-    background-color 340ms cubic-bezier(0.4, 0, 0.2, 1),
-    border-color 340ms cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow 340ms ease,
-    fill 230ms ease,
-    stroke 230ms ease !important;
+    color var(--motion-base) var(--ease-out-soft),
+    background-color var(--motion-base) var(--ease-out-soft),
+    border-color var(--motion-base) var(--ease-out-soft),
+    fill var(--motion-base) var(--ease-out-soft),
+    stroke var(--motion-base) var(--ease-out-soft) !important;
 }
 
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 420ms;
-  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  animation-duration: var(--motion-base);
+  animation-timing-function: var(--ease-out-soft);
 }
 
 ::view-transition-old(root) {
@@ -4982,7 +4887,6 @@ html[data-theme='light'] .theme-option {
 html[data-theme='light'] .theme-option:hover {
   border-color: #cbd4df;
   background: #ffffff;
-  box-shadow: 0 4px 14px rgba(28, 43, 65, 0.06);
 }
 
 html[data-theme='light'] .theme-option.is-selected {
@@ -5377,36 +5281,20 @@ html[data-theme='light'] .settings-reset:hover {
 }
 
 @media (max-width: 1240px) {
-  .sidebar {
-    width: 312px;
-  }
-
   .quick-jump {
     width: 30px;
     justify-content: center;
     padding: 0;
   }
-
-  
 }
 
 @media (max-width: 980px) {
-  .sidebar {
-    width: 288px;
-  }
-
-  
-
   .settings-modal {
     width: 720px;
   }
 }
 
 @media (max-width: 760px) {
-  .sidebar {
-    width: 262px;
-  }
-
   .clean-visual {
     width: 184px;
     height: 155px;
@@ -5418,152 +5306,35 @@ html[data-theme='light'] .settings-reset:hover {
 }
 
 /* ── Button motion system ────────────────────────────────────────── */
+/*
+ * Native controls change color, not position or size. Hover lift and press
+ * scaling make a dense desktop layout shimmer, so motion stays on color and
+ * opacity; anything that changes geometry is left out.
+ */
 
-button:not(:disabled):not(.palette-backdrop):not(.settings-backdrop) {
+button:not(:disabled):not(.palette-backdrop):not(.settings-backdrop):not(.open-sidebar-button) {
   transition:
     color var(--motion-fast) var(--ease-standard),
     background-color var(--motion-fast) var(--ease-standard),
     border-color var(--motion-fast) var(--ease-standard),
     box-shadow var(--motion-base) var(--ease-out-soft),
-    transform var(--motion-base) var(--ease-spring),
     filter var(--motion-fast) var(--ease-standard),
     opacity var(--motion-fast) var(--ease-standard);
-  transform-origin: center;
   -webkit-tap-highlight-color: transparent;
 }
 
-button:not(:disabled):not(.palette-backdrop):not(.settings-backdrop):active {
-  transform: scale(0.974);
-  transition-duration: 90ms;
-  transition-timing-function: var(--ease-standard);
-}
-
-.icon-button:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
-.icon-button svg {
-  transition: transform var(--motion-base) var(--ease-spring);
-}
-
-.icon-button:not(:disabled):hover svg {
-  transform: scale(1.08);
-}
-
-.settings-button:not(:disabled):hover svg {
-  transform: rotate(24deg) scale(1.04);
-}
-
-.file-nav .nav-button:not(:disabled):hover svg {
-  transform: translateY(var(--nav-icon-lift, 0));
-}
-
-.file-nav .nav-button:first-child {
-  --nav-icon-lift: -1px;
-}
-
-.file-nav .nav-button:last-child {
-  --nav-icon-lift: 1px;
-}
-
-.branch-selector:not(:disabled):hover,
-.workspace-switcher:not(:disabled):hover,
-.quick-jump:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
-.quick-jump:not(:disabled):hover {
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.13);
+/* Native press feedback is a tint, not a shrink; apply it instantly. */
+button:not(:disabled):not(.palette-backdrop):not(.settings-backdrop):not(.open-sidebar-button):active {
+  filter: brightness(0.9);
+  transition-duration: 0s;
 }
 
 .user-avatar:not(:disabled):hover {
   border-color: #4a545f;
-  transform: translateY(-1px) scale(1.035);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-}
-
-.clean-refresh svg,
-.settings-done svg {
-  transition: transform var(--motion-base) var(--ease-spring);
-}
-
-.clean-refresh:not(:disabled):hover,
-.settings-done:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
-.clean-refresh:not(:disabled):hover svg {
-  transform: rotate(26deg);
-}
-
-.project-mark,
-.file-status {
-  transition: transform var(--motion-base) var(--ease-spring);
-}
-
-.project-header:hover .project-mark {
-  transform: scale(1.045);
-}
-
-.file-row:hover .file-status {
-  transform: scale(1.07);
-}
-
-.file-row:not(:disabled):active,
-.project-header:not(:disabled):active {
-  transform: scale(0.992);
-}
-
-.theme-option:not(:disabled):hover {
-  transform: translateY(-2px);
-}
-
-.theme-option:not(:disabled):active {
-  transform: scale(0.982);
-  transition-duration: 90ms;
-}
-
-.segmented-control button:not(:disabled):active {
-  transform: scale(0.965);
-}
-
-.settings-done:not(:disabled):active,
-.clean-refresh:not(:disabled):active {
-  transform: scale(0.955);
-}
-
-.palette-item:not(:disabled):active {
-  transform: scale(0.988);
 }
 
 html[data-theme='light'] .user-avatar:not(:disabled):hover {
   border-color: #b9c4d1;
-  box-shadow: 0 4px 14px rgba(28, 43, 65, 0.11);
-}
-
-html[data-theme='light'] .quick-jump:not(:disabled):hover {
-  box-shadow: 0 6px 18px rgba(28, 43, 65, 0.08);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  button:not(:disabled):not(.palette-backdrop):not(.settings-backdrop),
-button:not(:disabled):not(.palette-backdrop):not(.settings-backdrop):active,
-.icon-button:hover,
-.icon-button:hover svg,
-.settings-button:hover svg,
-.file-nav .nav-button:hover svg,
-.branch-selector:hover,
-.workspace-switcher:hover,
-.quick-jump:hover,
-.user-avatar:hover,
-.clean-refresh:hover,
-.clean-refresh:hover svg,
-.settings-done:hover,
-.project-header:hover .project-mark,
-.file-row:hover .file-status,
-.theme-option:hover {
-    transform: none !important;
-  }
 }
 
 .settings-row-language {
@@ -5613,8 +5384,7 @@ html[data-theme='light'] .settings-row-language {
   box-shadow:
     0 20px 48px rgba(0, 0, 0, 0.48),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  transform-origin: top center;
-  animation: menuDrop 180ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .workspace-menu-label {
@@ -5816,8 +5586,7 @@ html[data-theme='light'] .settings-row-language {
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.46),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  transform-origin: top right;
-  animation: menuDropRight 180ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .repo-actions-label {
@@ -5914,7 +5683,7 @@ html[data-theme='light'] .settings-row-language {
   background: rgba(3, 5, 8, 0.66);
   backdrop-filter: blur(11px) saturate(0.82);
   cursor: default;
-  animation: fadeIn 160ms ease both;
+  animation: fadeIn var(--motion-fast) var(--ease-out-soft) both;
 }
 
 .manage-dialog {
@@ -5933,7 +5702,7 @@ html[data-theme='light'] .settings-row-language {
     0 36px 100px rgba(0, 0, 0, 0.6),
     0 0 0 1px rgba(0, 0, 0, 0.24),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  animation: manageDialogIn 220ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-fast) var(--ease-out-soft) both;
 }
 
 .manage-dialog.is-wide {
@@ -6182,39 +5951,6 @@ html[data-theme='light'] .settings-row-language {
   color: #818c98;
   font-size: 0.78rem;
   line-height: 1.65;
-}
-
-@keyframes menuDrop {
-  from {
-    opacity: 0;
-    transform: translateY(-5px) scale(0.975);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes menuDropRight {
-  from {
-    opacity: 0;
-    transform: translateY(-5px) scale(0.975);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes manageDialogIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.984);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 @media (max-width: 760px) {
@@ -6542,7 +6278,7 @@ html[data-theme='light'] .manage-confirm-body p {
 }
 
 .branch-chevron {
-  transition: transform 160ms var(--ease-spring);
+  transition: transform 150ms var(--ease-standard);
 }
 
 .branch-chevron.is-open {
@@ -6566,7 +6302,7 @@ html[data-theme='light'] .manage-confirm-body p {
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.48),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  animation: menuDropRight 180ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .branch-menu.is-form {
@@ -6577,8 +6313,6 @@ html[data-theme='light'] .manage-confirm-body p {
   width: 100%;
   min-width: 0;
   max-width: none;
-  transform-origin: bottom center;
-  animation-name: menuDropUp;
 }
 
 .branch-menu-label {
@@ -6641,17 +6375,6 @@ html[data-theme='light'] .manage-confirm-body p {
   font-size: 0.67rem;
 }
 
-@keyframes menuDropUp {
-  from {
-    opacity: 0;
-    transform: translateY(5px) scale(0.975);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
 .repo-picker {
   display: flex;
   flex-direction: column;
@@ -6674,14 +6397,12 @@ html[data-theme='light'] .manage-confirm-body p {
   font-weight: 560;
   transition:
     border-color 150ms var(--ease-standard),
-    background-color 150ms var(--ease-standard),
-    transform 220ms var(--ease-spring);
+    background-color 150ms var(--ease-standard);
 }
 
 .repo-choose-button:hover:not(:disabled) {
   border-color: rgba(251, 186, 99, 0.36);
   background: linear-gradient(180deg, rgba(251, 186, 99, 0.09), rgba(251, 186, 99, 0.025));
-  transform: translateY(-1px);
 }
 
 .repo-choose-button:disabled {
@@ -6783,7 +6504,7 @@ html[data-theme='light'] .manage-confirm-body p {
   border: 1px solid #2a333d;
   border-radius: 9px;
   background: rgba(236, 242, 251, 0.018);
-  animation: revealFiles 180ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .repo-picked-heading {
@@ -7433,12 +7154,6 @@ html[data-theme='light'] .repo-folder-empty small {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .repo-choose-button:hover {
-    transform: none;
-  }
-}
-
 .repo-loading-state {
   display: flex;
   flex-direction: column;
@@ -7525,10 +7240,17 @@ a {
 
 /* Title bar geometry */
 .sidebar {
-  width: 280px;
+  --sidebar-width: 280px;
+  width: var(--sidebar-width);
   transition:
-    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-right-color 160ms ease;
+    width var(--motion-panel) var(--ease-out-soft),
+    border-right-color var(--motion-fast) var(--ease-standard);
+}
+
+/* Keep the panel's contents at their full width while the panel narrows, so
+   collapsing clips the sidebar instead of reflowing every row and label. */
+.sidebar > :not(.sidebar-aurora) {
+  width: var(--sidebar-width);
 }
 
 .sidebar.is-collapsed {
@@ -7537,9 +7259,9 @@ a {
   border-right-color: transparent;
   visibility: hidden;
   transition:
-    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
-    border-right-color 160ms ease,
-    visibility 0s linear 240ms;
+    width var(--motion-panel) var(--ease-out-soft),
+    border-right-color var(--motion-fast) var(--ease-standard),
+    visibility 0s linear var(--motion-panel);
 }
 
 /* Resizing must track the pointer exactly, so skip the width easing. */
@@ -7550,7 +7272,7 @@ body.is-resizing-sidebar .sidebar {
 .repo-bar {
   height: 56px;
   padding: 0 14px;
-  transition: padding-left 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: padding-left var(--motion-panel) var(--ease-out-soft);
 }
 
 html[data-native='true'][data-os='macos']
@@ -7679,19 +7401,19 @@ html[data-theme='light'] .empty-sample-button:hover {
 /* Denser desktop rhythm at narrower window widths. */
 @media (max-width: 1240px) {
   .sidebar {
-    width: 268px;
+    --sidebar-width: 268px;
   }
 }
 
 @media (max-width: 980px) {
   .sidebar {
-    width: 252px;
+    --sidebar-width: 252px;
   }
 }
 
 @media (max-width: 760px) {
   .sidebar {
-    width: 230px;
+    --sidebar-width: 230px;
   }
 
   html[data-native='true'][data-os='macos'] .sidebar-top {
@@ -7711,7 +7433,8 @@ html[data-theme='light'] .empty-sample-button:hover {
 
   .sidebar,
   .sidebar.is-collapsed,
-  .repo-bar {
+  .repo-bar,
+  .open-sidebar-button {
     transition: none;
   }
 }
@@ -7790,21 +7513,31 @@ html[data-theme='light'] .repo-bar {
   scroll-margin-top: 32px;
 }
 
-.hunk-header.is-flashing {
+.hunk-header::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: rgba(251, 186, 99, 0.14);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hunk-header.is-flashing::after {
   animation: hunkFlash 900ms var(--ease-out-soft) both;
 }
 
 @keyframes hunkFlash {
-  0% {
-    box-shadow: inset 0 0 0 100px rgba(251, 186, 99, 0.14);
+  from {
+    opacity: 1;
   }
-  100% {
-    box-shadow: inset 0 0 0 100px rgba(246, 189, 96, 0);
+  to {
+    opacity: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hunk-header.is-flashing {
+  .hunk-header.is-flashing::after {
     animation: none;
   }
 }
@@ -8376,8 +8109,7 @@ html[data-theme='light'] .conflict-banner.is-ready .conflict-banner-action {
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.48),
     inset 0 1px 0 rgba(236, 242, 251, 0.035);
-  transform-origin: top right;
-  animation: menuDropRight 180ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .conflict-file-menu button {
@@ -9993,7 +9725,7 @@ html[data-theme='light'] .repo-actions-item.is-conflict {
   box-shadow:
     0 16px 40px rgba(0, 0, 0, 0.45),
     inset 0 1px 0 rgba(236, 242, 251, 0.03);
-  animation: menuDrop 130ms var(--ease-out-soft) both;
+  animation: fadeIn var(--motion-quick) var(--ease-out-soft) both;
 }
 
 .push-tag-menu {

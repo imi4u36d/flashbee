@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type {
+  CSSProperties,
   MouseEvent as ReactMouseEvent,
   ReactNode,
   Ref,
@@ -108,7 +109,7 @@ function ProjectFiles({
     if (!mounted) return
 
     if (!open) {
-      const timer = window.setTimeout(() => setMounted(false), 240)
+      const timer = window.setTimeout(() => setMounted(false), 200)
       return () => window.clearTimeout(timer)
     }
 
@@ -245,7 +246,7 @@ export function Sidebar({
     closingTimer.current = window.setTimeout(() => {
       closingTimer.current = null
       setClosingProjectId(null)
-    }, 280)
+    }, 200)
 
     return () => {
       if (closingTimer.current !== null) {
@@ -535,7 +536,11 @@ export function Sidebar({
     <aside
       ref={ref}
       className={`sidebar ${collapsed ? 'is-collapsed' : ''}`}
-      style={width === null ? undefined : { width }}
+      style={
+        width === null
+          ? undefined
+          : ({ '--sidebar-width': `${width}px` } as CSSProperties)
+      }
       inert={collapsed ? true : undefined}
     >
       <div className="sidebar-aurora" aria-hidden="true" />

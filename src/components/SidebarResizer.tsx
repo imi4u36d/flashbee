@@ -40,7 +40,7 @@ export function SidebarResizer({
 
   const applyWidth = (width: number) => {
     const sidebar = sidebarRef.current
-    if (sidebar) sidebar.style.width = `${width}px`
+    if (sidebar) sidebar.style.setProperty('--sidebar-width', `${width}px`)
   }
 
   const beginDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -53,7 +53,7 @@ export function SidebarResizer({
       pointerId: event.pointerId,
       startX: event.clientX,
       startWidth,
-      startInlineWidth: sidebar.style.width,
+      startInlineWidth: sidebar.style.getPropertyValue('--sidebar-width'),
       width: startWidth,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -88,9 +88,9 @@ export function SidebarResizer({
       const sidebar = sidebarRef.current
       if (sidebar) {
         if (state.startInlineWidth) {
-          sidebar.style.width = state.startInlineWidth
+          sidebar.style.setProperty('--sidebar-width', state.startInlineWidth)
         } else {
-          sidebar.style.removeProperty('width')
+          sidebar.style.removeProperty('--sidebar-width')
         }
       }
       return
@@ -127,7 +127,7 @@ export function SidebarResizer({
   }
 
   const resetWidth = () => {
-    sidebarRef.current?.style.removeProperty('width')
+    sidebarRef.current?.style.removeProperty('--sidebar-width')
     onReset()
   }
 

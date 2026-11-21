@@ -360,6 +360,7 @@ export function DiffViewer({
   const scrollFrame = useRef<number | null>(null)
   const flashTimer = useRef<number | null>(null)
   const hoverTimer = useRef<number | null>(null)
+  const hideTimer = useRef<number | null>(null)
   const stats = useMemo(() => fileStats(file), [file])
   const { name, dir } = pathParts(file.path)
   const language = languageLabels[file.language] ?? file.language.toUpperCase()
@@ -470,6 +471,10 @@ export function DiffViewer({
         window.clearTimeout(hoverTimer.current)
         hoverTimer.current = null
       }
+      if (hideTimer.current !== null) {
+        window.clearTimeout(hideTimer.current)
+        hideTimer.current = null
+      }
       setBlameHover(null)
     })
   }
@@ -484,6 +489,10 @@ export function DiffViewer({
     if (hoverTimer.current !== null) {
       window.clearTimeout(hoverTimer.current)
     }
+    if (hideTimer.current !== null) {
+      window.clearTimeout(hideTimer.current)
+      hideTimer.current = null
+    }
     // A short dwell keeps the card from flashing while the pointer crosses lines.
     hoverTimer.current = window.setTimeout(() => {
       hoverTimer.current = null
@@ -496,7 +505,14 @@ export function DiffViewer({
       window.clearTimeout(hoverTimer.current)
       hoverTimer.current = null
     }
-    setBlameHover(null)
+    if (hideTimer.current !== null) {
+      window.clearTimeout(hideTimer.current)
+    }
+    // Grace period: moving to the next line cancels this, so the card stays put.
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null
+      setBlameHover(null)
+    }, 140)
   }
 
   const jumpToHunk = (index: number) => {
@@ -551,6 +567,9 @@ export function DiffViewer({
       }
       if (hoverTimer.current !== null) {
         window.clearTimeout(hoverTimer.current)
+      }
+      if (hideTimer.current !== null) {
+        window.clearTimeout(hideTimer.current)
       }
     },
     [],

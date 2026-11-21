@@ -291,7 +291,7 @@ export default function App() {
         themeTransitionTimer.current = window.setTimeout(() => {
           root.classList.remove('theme-transition')
           themeTransitionTimer.current = null
-        }, 460)
+        }, 240)
       }
       applyDocumentSettings(settings, resolvedTheme)
     }
@@ -1381,7 +1381,7 @@ export default function App() {
       <div className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
         <Sidebar
           ref={sidebarRef}
-          width={sidebarCollapsed ? 0 : sidebarWidth}
+          width={sidebarWidth}
           collapsed={sidebarCollapsed}
           workspace={activeWorkspace}
           workspaces={workspaces}
