@@ -46,7 +46,7 @@ const flashbeeNightTheme = {
   colors: {
     ...theme.colors,
     'editor.background': '#00000000',
-    'editor.foreground': '#e1e1e1',
+    'editor.foreground': '#f5f5f5',
   },
   tokenColors: [
     {
@@ -105,7 +105,7 @@ const flashbeeNightTheme = {
         'meta.object-literal.key',
         'object.key',
       ],
-      settings: { foreground: '#e1e1e1' },
+      settings: { foreground: '#f5f5f5' },
     },
     {
       scope: ['variable.other.constant', 'support.constant', 'entity.name.constant'],
