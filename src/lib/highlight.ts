@@ -46,12 +46,12 @@ const flashbeeNightTheme = {
   colors: {
     ...theme.colors,
     'editor.background': '#00000000',
-    'editor.foreground': '#d9dfeb',
+    'editor.foreground': '#e1e1e1',
   },
   tokenColors: [
     {
       scope: ['comment', 'punctuation.definition.comment'],
-      settings: { foreground: '#66727f', fontStyle: 'italic' },
+      settings: { foreground: '#7c7c7e', fontStyle: 'italic' },
     },
     {
       scope: [
@@ -62,7 +62,7 @@ const flashbeeNightTheme = {
         'keyword.control',
         'keyword.operator.new',
       ],
-      settings: { foreground: '#c7a6ee' },
+      settings: { foreground: '#c0aaec' },
     },
     {
       scope: [
@@ -72,11 +72,11 @@ const flashbeeNightTheme = {
         'constant.other.symbol',
         'markup.inline.raw',
       ],
-      settings: { foreground: '#8fd3a8' },
+      settings: { foreground: '#9fd8a9' },
     },
     {
       scope: ['constant.numeric', 'constant.language', 'constant.character'],
-      settings: { foreground: '#f5c77e' },
+      settings: { foreground: '#f2c77e' },
     },
     {
       scope: [
@@ -85,7 +85,7 @@ const flashbeeNightTheme = {
         'meta.function-call',
         'variable.function',
       ],
-      settings: { foreground: '#82cdea' },
+      settings: { foreground: '#90c8e9' },
     },
     {
       scope: [
@@ -95,7 +95,7 @@ const flashbeeNightTheme = {
         'support.type',
         'entity.other.inherited-class',
       ],
-      settings: { foreground: '#f0c98f' },
+      settings: { foreground: '#eec68d' },
     },
     {
       scope: [
@@ -105,11 +105,11 @@ const flashbeeNightTheme = {
         'meta.object-literal.key',
         'object.key',
       ],
-      settings: { foreground: '#d9dfeb' },
+      settings: { foreground: '#e1e1e1' },
     },
     {
       scope: ['variable.other.constant', 'support.constant', 'entity.name.constant'],
-      settings: { foreground: '#f5a489' },
+      settings: { foreground: '#efa58c' },
     },
     {
       scope: [
@@ -118,7 +118,7 @@ const flashbeeNightTheme = {
         'punctuation.definition.tag',
         'support.class.component',
       ],
-      settings: { foreground: '#ef8ba0' },
+      settings: { foreground: '#ea8ba0' },
     },
     {
       scope: [
@@ -126,27 +126,27 @@ const flashbeeNightTheme = {
         'support.type.property-name',
         'variable.other.property',
       ],
-      settings: { foreground: '#8dc7ea' },
+      settings: { foreground: '#90c8e9' },
     },
     {
       scope: ['punctuation', 'meta.brace', 'keyword.operator'],
-      settings: { foreground: '#7f8b9c' },
+      settings: { foreground: '#959595' },
     },
     {
       scope: ['markup.heading', 'entity.name.section', 'markup.bold'],
-      settings: { foreground: '#fbba63', fontStyle: 'bold' },
+      settings: { foreground: '#f8bc65', fontStyle: 'bold' },
     },
     {
       scope: ['markup.underline.link', 'string.other.link'],
-      settings: { foreground: '#82cdea' },
+      settings: { foreground: '#90c8e9' },
     },
     {
       scope: ['invalid', 'invalid.illegal'],
-      settings: { foreground: '#f27f92' },
+      settings: { foreground: '#ef7f92' },
     },
     {
       scope: ['meta.diff.header', 'meta.diff.range'],
-      settings: { foreground: '#a8b3c2' },
+      settings: { foreground: '#b8b8bb' },
     },
   ],
 }
@@ -325,7 +325,7 @@ export function highlightLine(
   if (!code) return ''
 
   const themeName = appTheme === 'light' ? 'flashbee-day' : 'flashbee-night'
-  const fallback = appTheme === 'light' ? '#2c3542' : '#d9dfeb'
+  const fallback = appTheme === 'light' ? '#2c3542' : '#e1e1e1'
   const cacheKey = `${appTheme}\u0000${language}\u0000${code}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
