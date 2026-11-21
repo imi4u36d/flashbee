@@ -132,7 +132,7 @@ export function applyDocumentSettings(
 
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', theme === 'light' ? '#f3f5f8' : '#080a0d')
+    ?.setAttribute('content', theme === 'light' ? '#f3f5f8' : '#0b1219')
 }
 
 /** Applies the saved theme before React renders to avoid a flash of the wrong theme. */
