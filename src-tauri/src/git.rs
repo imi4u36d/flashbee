@@ -45,6 +45,20 @@ pub struct RemoteInfo {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub name: String,
+    /// Checked-out branch, or `HEAD` when the worktree is detached.
+    pub branch: String,
+    /// Short commit hash at the worktree's HEAD.
+    pub head: String,
+    pub detached: bool,
+    pub is_main: bool,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RepositoryInspection {
     pub path: String,
     pub name: String,
@@ -56,6 +70,8 @@ pub struct RepositoryInspection {
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    /// Every working tree attached to the repository, main worktree first.
+    pub worktrees: Vec<WorktreeInfo>,
 }
 
 /// Result of inspecting a folder the user wants to add. A folder is either a
@@ -514,6 +530,96 @@ fn probe_repository_root(directory: &Path) -> Result<Option<PathBuf>, CommandErr
     }
 }
 
+/// Working trees attached to the repository. The main worktree comes first,
+/// followed by every linked checkout; prunable entries (a worktree whose folder
+/// is gone) and bare entries are skipped because neither has files to review.
+fn read_worktrees(root_path: &Path) -> Vec<WorktreeInfo> {
+    let Ok(raw) = run_git(&["worktree", "list", "--porcelain"], root_path) else {
+        return Vec::new();
+    };
+
+    struct Candidate {
+        path: PathBuf,
+        branch: Option<String>,
+        head: String,
+        detached: bool,
+        bare: bool,
+        prunable: bool,
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for line in raw.lines() {
+        if let Some(value) = line.strip_prefix("worktree ") {
+            candidates.push(Candidate {
+                path: PathBuf::from(value),
+                branch: None,
+                head: String::new(),
+                detached: false,
+                bare: false,
+                prunable: false,
+            });
+            continue;
+        }
+
+        let Some(candidate) = candidates.last_mut() else {
+            continue;
+        };
+        if let Some(value) = line.strip_prefix("HEAD ") {
+            candidate.head = value.chars().take(7).collect();
+        } else if let Some(value) = line.strip_prefix("branch ") {
+            candidate.branch = Some(
+                value
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(value)
+                    .to_string(),
+            );
+        } else if line == "detached" {
+            candidate.detached = true;
+        } else if line == "bare" {
+            candidate.bare = true;
+        } else if line == "prunable" || line.starts_with("prunable ") {
+            candidate.prunable = true;
+        }
+    }
+
+    // Compare canonical paths so a worktree reached through a symlink (macOS
+    // `/tmp` → `/private/tmp`, for instance) still matches the inspected one.
+    let current = fs::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
+    let mut worktrees = Vec::new();
+    let mut saw_main = false;
+
+    for candidate in candidates {
+        if candidate.bare || candidate.prunable {
+            continue;
+        }
+        let path = fs::canonicalize(&candidate.path).unwrap_or_else(|_| candidate.path.clone());
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = candidate
+            .path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| candidate.path.to_string_lossy().to_string());
+        let detached = candidate.detached || candidate.branch.is_none();
+        let is_main = !saw_main;
+        saw_main = true;
+
+        worktrees.push(WorktreeInfo {
+            path: path.to_string_lossy().to_string(),
+            name,
+            branch: candidate.branch.unwrap_or_else(|| "HEAD".to_string()),
+            head: candidate.head,
+            detached,
+            is_main,
+            is_current: path == current,
+        });
+    }
+
+    worktrees
+}
+
 fn read_remotes(root_path: &Path) -> Vec<RemoteInfo> {
     let raw = run_git(&["remote", "-v"], root_path).unwrap_or_default();
     let mut remotes: Vec<RemoteInfo> = Vec::new();
@@ -678,6 +784,13 @@ fn inspect_root(root_path: &Path, detailed: bool) -> Result<RepositoryInspection
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| root_path.to_string_lossy().to_string());
 
+    // Only the full snapshot needs the worktree list; discovery stays cheap.
+    let worktrees = if detailed {
+        read_worktrees(root_path)
+    } else {
+        Vec::new()
+    };
+
     Ok(RepositoryInspection {
         path: root_path.to_string_lossy().to_string(),
         name,
@@ -688,6 +801,7 @@ fn inspect_root(root_path: &Path, detailed: bool) -> Result<RepositoryInspection
         upstream,
         ahead,
         behind,
+        worktrees,
     })
 }
 
@@ -2436,6 +2550,51 @@ mod tests {
         let child_discovery = discover_repositories(&child.to_string_lossy()).unwrap();
         assert!(child_discovery.is_repository);
         assert_eq!(child_discovery.repositories.len(), 1);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn reports_linked_worktrees_and_skips_missing_ones() {
+        let root = temp_root("worktrees");
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        git_in(&project, &["init"]);
+        configure_user(&project);
+        commit_file(&project, "README.md", "hello\n", "initial");
+
+        let checkout = root.join("checkout");
+        git_in(
+            &project,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                checkout.to_string_lossy().as_ref(),
+            ],
+        );
+
+        let inspection = inspect_root(&project, true).unwrap();
+        assert_eq!(inspection.worktrees.len(), 2);
+        assert!(inspection.worktrees[0].is_main);
+        assert!(inspection.worktrees[0].is_current);
+
+        let linked = inspection
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.name == "checkout")
+            .expect("linked worktree should be listed");
+        assert_eq!(linked.branch, "feature");
+        assert!(!linked.is_main);
+        assert!(!linked.is_current);
+        assert!(!linked.detached);
+        assert!(!linked.head.is_empty());
+
+        // A deleted worktree folder must not leave a dead entry behind.
+        fs::remove_dir_all(&checkout).unwrap();
+        let inspection = inspect_root(&project, true).unwrap();
+        assert_eq!(inspection.worktrees.len(), 1);
 
         fs::remove_dir_all(&root).unwrap();
     }

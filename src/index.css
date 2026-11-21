@@ -589,6 +589,59 @@ html[data-native='true'][data-os='macos'] .sidebar-top {
   font-size: 0.625rem;
 }
 
+/* Linked worktrees nest below their repository with a quiet guide rail. */
+.worktree-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 4px 14px;
+  padding-left: 9px;
+  border-left: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.project-card.is-worktree {
+  margin-bottom: 2px;
+}
+
+.project-card.is-worktree .project-header {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.project-card.is-worktree .project-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  font-size: 0.6875rem;
+}
+
+.project-card.is-worktree .project-name {
+  color: #aab3c2;
+  font-size: 0.8125rem;
+}
+
+.worktree-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #6f7b8e;
+}
+
+.worktree-count {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  color: #6f7b8e;
+  font-size: 0.6563rem;
+}
+
 .project-branchline {
   display: flex;
   align-items: center;
@@ -4076,6 +4129,27 @@ html[data-theme='light'] .project-count {
 
 html[data-theme='light'] .clean-label {
   color: #5c866f;
+}
+
+html[data-theme='light'] .worktree-stack {
+  border-left-color: rgba(24, 38, 57, 0.1);
+}
+
+html[data-theme='light'] .project-card.is-worktree .project-name {
+  color: #6c7788;
+}
+
+html[data-theme='light'] .project-card.is-worktree.is-active .project-name {
+  color: #1d2734;
+}
+
+html[data-theme='light'] .worktree-badge {
+  background: rgba(24, 38, 57, 0.05);
+  color: #7b8796;
+}
+
+html[data-theme='light'] .worktree-count {
+  color: #7b8796;
 }
 
 html[data-theme='light'] .project-branchline {

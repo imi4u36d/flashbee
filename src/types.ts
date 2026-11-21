@@ -44,6 +44,18 @@ export interface RemoteInfo {
   url: string
 }
 
+/** One checkout attached to a repository through `git worktree`. */
+export interface WorktreeInfo {
+  path: string
+  name: string
+  /** Checked-out branch, or `HEAD` when detached. */
+  branch: string
+  head: string
+  detached: boolean
+  isMain: boolean
+  isCurrent: boolean
+}
+
 export type ConflictSide = 'ours' | 'theirs'
 
 export interface ConflictEntry {
@@ -85,6 +97,12 @@ export interface Project {
   source?: 'demo' | 'local'
   /** Folder group this repository was discovered in, if any. */
   groupId?: string
+  /** Primary working tree this linked worktree was discovered from. */
+  worktreeOf?: string
+  /** Short HEAD hash, shown when the linked worktree is detached. */
+  worktreeHead?: string
+  /** True once this derived worktree has read its own snapshot. */
+  hydrated?: boolean
 }
 
 /** A parent folder the user added to keep its sub-repositories together. */

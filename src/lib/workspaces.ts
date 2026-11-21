@@ -169,11 +169,15 @@ export function saveWorkspaceState(state: WorkspaceState) {
     ...state,
     workspaces: state.workspaces.map((workspace) => ({
       ...workspace,
-      projects: workspace.projects.map((project) =>
-        project.source === 'local'
-          ? { ...project, files: [], conflicts: [], mergeInProgress: false }
-          : project,
-      ),
+      // Worktree cards are derived from the repository snapshot on every
+      // launch; persisting them would resurrect checkouts that no longer exist.
+      projects: workspace.projects
+        .filter((project) => !project.worktreeOf)
+        .map((project) =>
+          project.source === 'local'
+            ? { ...project, files: [], conflicts: [], mergeInProgress: false }
+            : project,
+        ),
     })),
   }
   const contents = JSON.stringify({ version: STORAGE_VERSION, ...persistable })

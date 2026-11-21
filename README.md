@@ -15,6 +15,9 @@ is preserved in [`demo/`](demo/README.md) as a runnable reference.
 - Local Git engine written in Rust: branches, working tree status, unified diffs,
   staged/unstaged groups, untracked files, and rename detection
 - Multi-repository workspaces, created and persisted entirely on this Mac
+- Linked `git worktree` checkouts appear nested under their repository with their
+  own branch, ahead/behind state, and changes; review, diff, push, and merge them
+  without adding each checkout by hand
 - Add a parent folder to discover every Git repository inside it and add them in
   one step; they stay together in a collapsible folder group you can rescan for
   new repositories. Plain folders can optionally be initialized with `git init`

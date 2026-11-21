@@ -8,6 +8,7 @@ import {
   Copy,
   FolderOpen,
   FolderPlus,
+  GitFork,
   Layers3,
   LoaderCircle,
   MoreHorizontal,
@@ -146,12 +147,18 @@ export function RepoBar({
         <span className="repo-copy">
           <span className="repo-title-row">
             <span className="repo-title">{project?.name ?? workspaceName}</span>
-            {project && (
-              <span className="repo-local-chip">
-                <i />
-                {t('repo.local')}
-              </span>
-            )}
+            {project &&
+              (project.worktreeOf ? (
+                <span className="repo-local-chip" title={project.path}>
+                  <GitFork size={10} strokeWidth={2.2} />
+                  {t('repo.worktree')}
+                </span>
+              ) : (
+                <span className="repo-local-chip">
+                  <i />
+                  {t('repo.local')}
+                </span>
+              ))}
           </span>
           <span className="repo-path">
             {project?.path ?? t('sidebar.noRepositories')}
@@ -285,7 +292,7 @@ export function RepoBar({
               <FolderPlus size={14} strokeWidth={1.9} />
               {t('repo.add')}
             </button>
-            {project && (
+            {project && !project.worktreeOf && (
               <button
                 type="button"
                 role="menuitem"

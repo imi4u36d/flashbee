@@ -10,6 +10,7 @@ import type {
   Hunk,
   RemoteBranch,
   RemoteInfo,
+  WorktreeInfo,
 } from '../types'
 
 export interface RepositoryInspection {
@@ -22,6 +23,7 @@ export interface RepositoryInspection {
   upstream: string | null
   ahead: number
   behind: number
+  worktrees: WorktreeInfo[]
 }
 
 export interface RepositoryDiscovery {

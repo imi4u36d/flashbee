@@ -55,6 +55,11 @@ import {
   type RepositoryAddRequest,
   type WorkspaceState,
 } from './lib/workspaces'
+import {
+  mergeWorktreeProjects,
+  nestedWorktrees,
+  worktreeProjectId,
+} from './lib/worktrees'
 import type { DiffFile, DiffMode, Project, ProjectGroup } from './types'
 
 type Toast = {
@@ -322,11 +327,16 @@ export default function App() {
       ...snapshot.branches,
       ...remoteBranches.map((branch) => branch.name),
     ]
+    const worktrees = snapshot.worktrees ?? []
     setWorkspaceState((current) => ({
       ...current,
-      workspaces: current.workspaces.map((workspace) => ({
-        ...workspace,
-        projects: workspace.projects.map((project) => {
+      workspaces: current.workspaces.map((workspace) => {
+        const target = workspace.projects.find(
+          (project) => project.id === projectId,
+        )
+        if (!target) return workspace
+
+        const projects = workspace.projects.map((project) => {
           if (project.id !== projectId) return project
           return {
             ...project,
@@ -340,15 +350,60 @@ export default function App() {
             behind: snapshot.behind ?? 0,
             conflicts: snapshot.conflicts ?? [],
             mergeInProgress: Boolean(snapshot.mergeInProgress),
+            hydrated: project.worktreeOf ? true : project.hydrated,
             branch: knownBranches.includes(project.branch)
               ? project.branch
               : snapshot.currentBranch,
             updated: 'now',
           }
-        }),
-      })),
+        })
+
+        // Linked checkouts hang off full repositories only. A worktree card
+        // never spawns its own children.
+        const updated = projects.find((project) => project.id === projectId)
+        if (!updated || target.worktreeOf || worktrees.length === 0) {
+          return { ...workspace, projects }
+        }
+
+        return {
+          ...workspace,
+          projects: mergeWorktreeProjects(projects, updated, worktrees),
+        }
+      }),
     }))
   }
+
+  // Worktree cards are derived, so their change counts load right after the
+  // parent repository appears instead of waiting for a click.
+  const hydratingWorktrees = useRef(new Set<string>())
+  useEffect(() => {
+    const pending = activeWorkspace.projects.filter(
+      (project) =>
+        project.worktreeOf &&
+        !project.hydrated &&
+        project.source === 'local' &&
+        !hydratingWorktrees.current.has(project.id),
+    )
+    if (pending.length === 0) return
+
+    void (async () => {
+      for (const project of pending) {
+        hydratingWorktrees.current.add(project.id)
+        try {
+          const snapshot = await fetchRepositorySnapshot(
+            project.path,
+            project.branch,
+          )
+          applySnapshot(project.id, snapshot)
+        } catch {
+          // Keep the card visible; the next refresh will try again.
+        } finally {
+          hydratingWorktrees.current.delete(project.id)
+        }
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspace.projects])
 
   useEffect(() => {
     if (!activeProject || activeProject.source !== 'local') return
@@ -482,11 +537,10 @@ export default function App() {
 
     if (activeProject?.source === 'local') {
       setRefreshing(true)
-      fetchRepositorySnapshot(activeProject.path, activeProject.branch)
-        .then((snapshot) => {
-          applySnapshot(activeProject.id, snapshot)
-          showToast('app.repoRefreshed', { count: snapshot.files.length })
-        })
+      refreshProjectTree(activeProject)
+        .then((snapshot) =>
+          showToast('app.repoRefreshed', { count: snapshot.files.length }),
+        )
         .catch(() => showToast('repo.refreshFailed'))
         .finally(() => setRefreshing(false))
       return
@@ -515,6 +569,33 @@ export default function App() {
   const reloadProjectSnapshot = async (project: Project) => {
     const snapshot = await fetchRepositorySnapshot(project.path, project.branch)
     applySnapshot(project.id, snapshot)
+  }
+
+  /**
+   * Refreshes a repository together with its linked working trees: the parent
+   * snapshot only knows their branch and path, while the changes live in each
+   * checkout.
+   */
+  const refreshProjectTree = async (project: Project) => {
+    const snapshot = await fetchRepositorySnapshot(project.path, project.branch)
+    applySnapshot(project.id, snapshot)
+
+    for (const worktree of nestedWorktrees(snapshot.worktrees)) {
+      try {
+        const childSnapshot = await fetchRepositorySnapshot(
+          worktree.path,
+          worktree.detached ? 'HEAD' : worktree.branch,
+        )
+        applySnapshot(
+          worktreeProjectId(project.id, worktree.path),
+          childSnapshot,
+        )
+      } catch {
+        // Leave the checkout's last known state in place.
+      }
+    }
+
+    return snapshot
   }
 
   const handlePull = () => {
@@ -800,8 +881,10 @@ export default function App() {
   const handleRemoveRepository = () => {
     if (!activeProject) return
     const removed = activeProject
+    // Removing a repository takes its derived worktree cards with it.
     const remaining = activeWorkspace.projects.filter(
-      (project) => project.id !== removed.id,
+      (project) =>
+        project.id !== removed.id && project.worktreeOf !== removed.path,
     )
     setWorkspaceState((current) => ({
       ...current,
@@ -983,9 +1066,7 @@ export default function App() {
 
   refreshOnFocusRef.current = () => {
     if (!activeProject || activeProject.source !== 'local' || refreshing) return
-    void fetchRepositorySnapshot(activeProject.path, activeProject.branch)
-      .then((snapshot) => applySnapshot(activeProject.id, snapshot))
-      .catch(() => undefined)
+    void refreshProjectTree(activeProject).catch(() => undefined)
   }
 
   const refreshProject = (project: Project) => {
@@ -997,9 +1078,8 @@ export default function App() {
       handleRefresh()
       return
     }
-    fetchRepositorySnapshot(project.path, project.branch)
+    refreshProjectTree(project)
       .then((snapshot) => {
-        applySnapshot(project.id, snapshot)
         showToast('app.repoRefreshed', { count: snapshot.files.length })
       })
       .catch(() => showToast('repo.refreshFailed'))
@@ -1048,15 +1128,18 @@ export default function App() {
       })
     }
 
-    entries.push('separator')
-    entries.push({
-      label: t('repo.remove'),
-      danger: true,
-      action: () => {
-        activateProject(project)
-        setManageDialog({ kind: 'delete-repository' })
-      },
-    })
+    // Worktree cards come back with their parent, so "Remove" would be a lie.
+    if (!project.worktreeOf) {
+      entries.push('separator')
+      entries.push({
+        label: t('repo.remove'),
+        danger: true,
+        action: () => {
+          activateProject(project)
+          setManageDialog({ kind: 'delete-repository' })
+        },
+      })
+    }
 
     showContextMenu(event, entries)
   }

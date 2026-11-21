@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -12,6 +12,7 @@ import {
   FolderGit2,
   FolderPlus,
   GitBranch,
+  GitFork,
   Layers3,
   PanelLeftClose,
   Plus,
@@ -283,13 +284,21 @@ export function Sidebar({
       count,
     })
 
-  const renderProject = (project: Project) => {
+  const renderProjectCard = (project: Project, nested = false) => {
     const expanded = expandedProjectId === project.id
     const closing = !expanded && closingProjectId === project.id
     const cardExpanded = expanded || closing
     const active = activeProjectId === project.id
     const staged = project.files.filter((file) => file.staged)
     const unstaged = project.files.filter((file) => !file.staged)
+    const linkedWorktrees = nested
+      ? []
+      : projects.filter((entry) => entry.worktreeOf === project.path)
+    const worktreeCount = linkedWorktrees.length
+    const branchLabel =
+      nested && project.branch === 'HEAD' && project.worktreeHead
+        ? `@${project.worktreeHead}`
+        : project.branch
     const nameCounts = new Map<string, number>()
     for (const file of project.files) {
       const { name } = pathParts(file.path)
@@ -301,7 +310,7 @@ export function Sidebar({
         key={project.id}
         className={`project-card ${active ? 'is-active' : ''} ${
           cardExpanded ? 'is-expanded' : ''
-        }`}
+        } ${nested ? 'is-worktree' : ''}`}
       >
         <button
           className="project-header"
@@ -309,11 +318,20 @@ export function Sidebar({
           onClick={() => onProjectClick(project)}
           onContextMenu={(event) => onProjectContextMenu(project, event)}
           aria-expanded={expanded}
+          title={nested ? project.path : undefined}
         >
           <ProjectMark project={project} />
           <span className="project-copy">
             <span className="project-topline">
               <span className="project-name">{project.name}</span>
+              {nested && (
+                <span
+                  className="worktree-badge"
+                  title={t('sidebar.linkedWorktree')}
+                >
+                  <GitFork size={9} strokeWidth={2.1} />
+                </span>
+              )}
               {project.files.length > 0 ? (
                 <span className="project-count">{project.files.length}</span>
               ) : (
@@ -322,7 +340,7 @@ export function Sidebar({
             </span>
             <span className="project-branchline">
               <GitBranch size={11} strokeWidth={1.9} />
-              <span className="branch-name">{project.branch}</span>
+              <span className="branch-name">{branchLabel}</span>
               {project.ahead > 0 && (
                 <span className="ahead-count">
                   <ArrowUp size={9} strokeWidth={2.4} />
@@ -331,6 +349,20 @@ export function Sidebar({
               )}
               {project.behind > 0 && (
                 <span className="behind-count">↓{project.behind}</span>
+              )}
+              {worktreeCount > 0 && (
+                <span
+                  className="worktree-count"
+                  title={t(
+                    worktreeCount === 1
+                      ? 'sidebar.worktreeCountOne'
+                      : 'sidebar.worktreeCountMany',
+                    { count: worktreeCount },
+                  )}
+                >
+                  <GitFork size={9} strokeWidth={2.1} />
+                  {worktreeCount}
+                </span>
               )}
             </span>
           </span>
@@ -376,9 +408,29 @@ export function Sidebar({
     )
   }
 
+  const renderProject = (project: Project) => {
+    const children = projects.filter((entry) => entry.worktreeOf === project.path)
+    const card = renderProjectCard(project)
+    if (children.length === 0) return card
+
+    return (
+      <Fragment key={project.id}>
+        {card}
+        <div className="worktree-stack">
+          {children.map((child) => renderProjectCard(child, true))}
+        </div>
+      </Fragment>
+    )
+  }
+
   const renderGroup = (group: ProjectGroup, groupProjects: Project[]) => {
     const collapsed = Boolean(group.collapsed)
     const scanning = scanningGroupId === group.id
+    const roots = groupProjects.filter((project) => !project.worktreeOf)
+    const rootPaths = new Set(roots.map((project) => project.path))
+    const orphanWorktrees = groupProjects.filter(
+      (project) => project.worktreeOf && !rootPaths.has(project.worktreeOf),
+    )
 
     return (
       <div
@@ -402,7 +454,7 @@ export function Sidebar({
             <span className="project-group-copy">
               <span className="project-group-name">{group.name}</span>
               <span className="project-group-meta">
-                {repoCountLabel(groupProjects.length)}
+                {repoCountLabel(roots.length)}
               </span>
             </span>
             <ChevronDown
@@ -427,10 +479,13 @@ export function Sidebar({
         </div>
         {collapsed ? null : (
           <div className="project-group-projects">
-            {groupProjects.length === 0 ? (
+            {roots.length === 0 && orphanWorktrees.length === 0 ? (
               <span className="project-group-empty">{t('repo.groupEmpty')}</span>
             ) : (
-              groupProjects.map(renderProject)
+              <>
+                {roots.map(renderProject)}
+                {orphanWorktrees.map((project) => renderProjectCard(project))}
+              </>
             )}
           </div>
         )}
@@ -439,10 +494,15 @@ export function Sidebar({
   }
 
   // Keep groups where their first repository appears, then show any empty group.
+  const rootProjects = projects.filter((project) => !project.worktreeOf)
+  const rootPaths = new Set(rootProjects.map((project) => project.path))
+  const orphanWorktrees = projects.filter(
+    (project) => project.worktreeOf && !rootPaths.has(project.worktreeOf),
+  )
   const groupById = new Map(groups.map((group) => [group.id, group]))
   const renderedGroupIds = new Set<string>()
   const sections: ReactNode[] = []
-  for (const project of projects) {
+  for (const project of rootProjects) {
     const group = project.groupId ? groupById.get(project.groupId) : undefined
     if (!group) {
       sections.push(renderProject(project))
@@ -466,6 +526,9 @@ export function Sidebar({
         projects.filter((entry) => entry.groupId === group.id),
       ),
     )
+  }
+  for (const project of orphanWorktrees) {
+    sections.push(renderProjectCard(project))
   }
 
   return (
@@ -492,7 +555,7 @@ export function Sidebar({
             </span>
             <span className="workspace-copy">
               <strong>{activeWorkspaceName}</strong>
-              <span>{repoCountLabel(projects.length)}</span>
+              <span>{repoCountLabel(rootProjects.length)}</span>
             </span>
             <ChevronDown size={14} className="workspace-chevron" />
           </button>
@@ -521,7 +584,12 @@ export function Sidebar({
                     </span>
                     <span className="workspace-menu-copy">
                       <strong>{workspaceLabel(entry, t)}</strong>
-                      <span>{repoCountLabel(entry.projects.length)}</span>
+                      <span>
+                        {repoCountLabel(
+                          entry.projects.filter((project) => !project.worktreeOf)
+                            .length,
+                        )}
+                      </span>
                     </span>
                     {isActive && <Check size={13} strokeWidth={2.2} />}
                   </button>
@@ -572,7 +640,7 @@ export function Sidebar({
 
       <div className="projects-heading">
         <span>{t('sidebar.repositories')}</span>
-        <span className="heading-count">{projects.length}</span>
+        <span className="heading-count">{rootProjects.length}</span>
         <span className="heading-line" />
         <button
           className="icon-button subtle heading-add"
@@ -585,7 +653,7 @@ export function Sidebar({
       </div>
 
       <div className="projects-scroll">
-        {projects.length === 0 && groups.length === 0 && (
+        {rootProjects.length === 0 && groups.length === 0 && (
           <div className="sidebar-empty-repos">
             <span className="sidebar-empty-icon">
               <Layers3 size={17} strokeWidth={1.7} />
