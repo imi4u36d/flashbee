@@ -1,17 +1,16 @@
-# Dependencies
+# Rust
+/target
+**/target
+
+# Local bundles
+*.app
+*.dmg
+
+# Dependencies and build output (archived web demo)
 node_modules
-
-# Build output
-dist
-dist-ssr
+demo/dist
+demo/dist-ssr
 *.local
-
-# Tauri / Rust
-src-tauri/target
-src-tauri/gen/schemas
-src-tauri/gen/apple
-src-tauri/gen/android
-src-tauri/.tauri
 
 # Logs
 logs
@@ -27,9 +26,6 @@ pnpm-debug.log*
 .idea
 .DS_Store
 *.suo
-*.ntvs*
-*.njsproj
-*.sln
 *.sw?
 **/.DS_Store
 

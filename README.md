@@ -1,151 +1,114 @@
 # FlashBee
 
-A calm, native macOS Git viewer for reviewing changes across multiple local repositories.
+A calm, native macOS Git workspace for reviewing changes across many local repositories — built with [GPUI](https://www.gpui.rs/), the GPU-accelerated UI framework behind Zed.
 
-FlashBee reads repositories directly from disk, never uploads them, and keeps the whole
-review flow — workspaces, repository tree, branches, and diffs — in one desktop window.
+FlashBee reads repositories directly from disk, never uploads them, and keeps the whole review flow — workspaces, repository tree, branches, diffs, history, and commits — in one native window.
 
-This branch turns the original web app into a **Tauri 2 desktop app**. The browser version
-is preserved in [`demo/`](demo/README.md) as a runnable reference.
+![FlashBee workspace overview](docs/overview.png)
 
 ## Highlights
 
-- Native macOS window with overlay title bar, integrated traffic lights, system menu bar,
-  and window state restored in logical points across Retina displays
-- Local Git engine written in Rust: branches, working tree status, unified diffs,
-  staged/unstaged groups, untracked files, and rename detection
-- Multi-repository workspaces, created and persisted entirely on this Mac
-- Linked `git worktree` checkouts appear nested under their repository with their
-  own branch, ahead/behind state, and changes; review, diff, push, and merge them
-  without adding each checkout by hand
-- Add a parent folder to discover every Git repository inside it and add them in
-  one step; they stay together in a collapsible folder group you can rescan for
-  new repositories. Plain folders can optionally be initialized with `git init`
-- Native folder picker, reveal in Finder, open in editor/default app, and native right-click menus
-- Side-by-side and unified diff views with syntax highlighting for TypeScript, TSX, Rust, CSS,
-  JSON, Markdown, Python, Go, WGSL, and more
-- Hover any diff line to see its author, relative commit time, hash, and commit summary
-- Branch comparison is read-only: pick a local or remote-tracking branch to diff the
-  working tree against it
-- Pull from the repository toolbar; pushing opens a commit review dialog with per-commit
-  diffs, selective commits, tag pushes, and `--force-with-lease`, with upstream tracking
-  and ahead/behind counts; configure or update remote URLs without leaving the app
-- Merge conflict resolver with side-by-side and unified views: resolve each conflict
-  left or right, take an entire side, or quick-merge every conflict where only one side
-  changed. Resolved files are staged, and the merge can be completed or aborted
-- Auto-refresh when the window regains focus
-- English and Simplified Chinese UI, with a matching localized application menu
-- Daylight, Midnight, and follow-system themes; system UI/code fonts by default with
-  adjustable font choices and sizes
-- Desktop interaction details: hidden scrollbars, compact single-line file rows,
-  native text selection, no browser context menus, and keyboard-first navigation
+- **Native GPUI app** — no webview and no Node runtime at launch. Custom title bar, system fonts, Metal rendering, and a warm daylight / midnight palette.
+- **Multi-repository workspaces** — add a repository, or point at a parent folder to discover every Git repository below it. Discovered repositories stay together in a collapsible folder group.
+- **Linked worktrees** — `git worktree` checkouts appear nested under their repository with their own branch, ahead/behind state, and changes.
+- **Staged and unstaged views** — a partially staged file appears in both groups with the correct diff for each side.
+- **Stage, unstage, discard** — file-level and hunk-level actions. Discards are confirmed before anything is written.
+- **Commit and push** — write a message, amend the previous commit, or commit & push in one flow. The push dialog reviews the commits that would land on the remote and supports selective commits, tags, and `--force-with-lease`.
+- **Fetch, pull, push** — fetch one repository or the whole workspace, optionally in the background. Pull keeps merge conflicts in the resolver.
+- **Branch manager** — search, create, switch, merge, rename, and delete local branches. Branches checked out elsewhere open their worktree instead of failing; unmerged branches require an explicit force delete.
+- **Worktree manager** — list every checkout attached to a repository, add a worktree on a new or existing branch, open it in the workspace, remove clean or dirty worktrees, and prune stale records.
+- **Branches and stashes** — switch or create a branch; if the working tree is dirty, stash it first. Stashes can be saved, restored, and dropped in place.
+- **Merge conflict resolver** — side-by-side and unified conflict views, take either side per conflict, take a whole file, or resolve files where only one side changed. Resolved files are staged; the merge can be completed or aborted.
+- **Diff review** — split or unified layout, syntax highlighting, word-level emphasis on paired lines, inline author/commit details on hover, image before/after comparison, binary and Git LFS notices.
+- **Review progress** — mark files reviewed, watch progress per repository, filter to unreviewed / generated / whitespace-only changes, and filter by file name.
+- **Workspace overview** — an attention inbox that sorts repositories by conflicts, merge state, uncommitted changes, and remote drift.
+- **History** — commit log with a lane gutter, per-file history, commit details, and a diff between any two refs.
+- **Cross-repository search** — `⌘K` searches repositories, changed files, commit messages, and file contents (ripgrep when available, `git grep` otherwise).
+- **Local settings** — appearance, interface language (English / 简体中文), interface and code sizes, and auto-fetch. Workspaces, settings, window bounds, and review progress stay on this Mac.
 
 ## Requirements
 
 - macOS 11 or newer
-- Node.js 20+
-- Rust stable (`rustup`) with the macOS target
-- Xcode Command Line Tools
-- Git installed and available on `PATH`
+- Xcode command line tools (GPUI renders with Metal)
+- Rust stable 1.85+ (the workspace uses edition 2024)
+- Git on `PATH`
 
-## Run the app
-
-```bash
-npm install
-npm run app
-```
-
-`npm run app` starts Vite and launches the Tauri shell with HMR.
-
-### Build a `.app`
+## Run
 
 ```bash
-npm run app:build
+cargo run -p flashbee
 ```
 
-The bundle is written to `src-tauri/target/release/bundle/macos/FlashBee.app`
-(and a `.dmg` next to it when the default bundle targets are used).
-
-For a faster local check without release optimizations:
+For an optimized build:
 
 ```bash
-npm run tauri build -- --debug --bundles app
+cargo run --release -p flashbee
 ```
 
-## Run the archived web demo
+## Build a `.app`
 
 ```bash
-cd demo
-npm install
-npm run dev
+./scripts/bundle-macos.sh          # FlashBee.app
+./scripts/bundle-macos.sh --dmg    # FlashBee.app + FlashBee.dmg
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The demo keeps the original
-Vite middleware Git API and browser-first styling; it is intentionally independent
-of the native app.
+The bundle is written to `target/release/bundle/macos/FlashBee.app`. It is ad-hoc signed so it launches locally; for distribution, sign it with your Developer ID and notarize it.
+
+## Test
+
+The Git engine is UI-independent and covered by integration tests that create real repositories on disk:
+
+```bash
+cargo test -p flashbee-git
+```
+
+Coverage includes staging and unstaging files and hunks, commits and amends, discards, branch switching with stash protection, branch listing with worktree ownership, branch create/rename/delete/merge (including conflicts), worktree add/remove/prune, stashes, fetch, push, pull, conflict resolution, history, ref comparison, and both search paths.
+
+## Architecture
+
+```
+crates/
+  flashbee-git/    Local Git engine: inspection, snapshots, staging, commits,
+                   branches, stashes, remotes, history, search, conflicts.
+  flashbee-app/    GPUI desktop app: state, views, themes, i18n, text inputs,
+                   syntax highlighting, diff rendering, persistence.
+scripts/
+  bundle-macos.sh  Builds a locally signed .app (and optional .dmg).
+demo/              Archived browser-first version, kept as a reference.
+```
+
+All Git work runs through the local `git` binary on a background thread pool. The UI never blocks on a repository, and in-flight results are guarded so stale snapshots cannot overwrite newer state.
+
+User data lives in `~/Library/Application Support/com.flashbee.app/` (`workspaces.json`, `settings.json`, `layout.json`, `window-state.json`, `reviews.json`). The directory is shared with the earlier Tauri build, so existing workspaces and preferences carry over.
 
 ## Keyboard shortcuts
 
 | Action | Shortcut |
 | --- | --- |
-| Open repository | `⌘ O` |
+| Quick open / search | `⌘ K` |
+| Add repository | `⌘ O` |
 | New workspace | `⇧ ⌘ N` |
-| Command palette | `⌘ K` |
-| Toggle sidebar | `⌘ \` |
+| Refresh repository | `⌘ R` |
+| Fetch | `⇧ ⌘ F` |
+| Open commit composer | `⌘ ↵` |
+| Open history | `⇧ ⌘ H` |
+| Open workspace overview | `⇧ ⌘ O` |
+| Manage branches and worktrees | `⇧ ⌘ B` |
 | Split / unified diff | `⌘ 1` / `⌘ 2` |
-| Previous / next file | `⌘ [` / `⌘ ]` |
-| Refresh | `⌘ R` |
+| Toggle split / unified | `S` |
+| Previous / next file | `K` / `J` |
+| Toggle reviewed | `⇧ ⌘ R` |
+| Stage all | `⇧ ⌘ A` |
+| Copy change summary for a PR | `⇧ ⌘ C` |
+| Toggle sidebar | `⌘ \` |
 | Settings | `⌘ ,` |
-| Next / previous file | `J` / `K` |
-| Toggle diff layout | `S` |
 | Close overlay | `Esc` |
+| Quit | `⌘ Q` |
 
-## Project layout
+## Privacy
 
-```text
-.
-├── src/                    React frontend for the desktop app
-│   ├── components/         Sidebar, diff viewer, palette, settings, dialogs
-│   ├── lib/                Native bridge, Git client, i18n, settings, workspaces
-│   └── data/projects.ts    Optional sample workspace data
-├── src-tauri/
-│   ├── src/git.rs          Git inspection and diff parsing
-│   ├── src/menu.rs         Localized macOS application menu
-│   ├── src/storage.rs      JSON persistence in the app data directory
-│   ├── src/window_state.rs Logical-point window state restore
-│   ├── src/lib.rs          Tauri commands and app setup
-│   └── tauri.conf.json     Window, bundle, CSP, and plugin configuration
-├── demo/                   Archived browser version (Vite + web Git API)
-└── public/                 Favicon
-```
-
-## How data is stored
-
-- Workspaces and preferences are mirrored to JSON files under
-  `~/Library/Application Support/com.flashbee.app/`.
-- Window geometry is stored in `window-state.json` in the same directory and restored
-  only when it still intersects a connected display.
-- Local repository diffs and transient merge state are **not** persisted; they are
-  re-read from disk on launch. Only repository paths, names, folder groupings, and the
-  selected comparison branch are kept. Remote URLs live in each repository's Git config.
-- Repositories are never uploaded except for the explicit pull and push commands you
-  trigger. All other Git work runs locally.
-
-## Notes
-
-- The app compares the working tree against the selected branch (or `HEAD` when no
-  branch is selected). Selecting a branch never checks it out.
-- Pull and push are the only network operations. Pull uses a merge and stops on
-  conflicts; the resolver then writes the chosen result for each conflicted file and
-  stages it with `git add`. Completing the merge creates the merge commit. Aborting
-  returns the work tree to its pre-merge state.
-- The optional `git init` when adding a plain folder is the only other repository
-  mutation FlashBee performs.
-- The sample workspace is optional and can be opened from the empty state; remove it like
-  any other workspace when finished.
-- If a repository is moved or deleted on disk, FlashBee reports the load failure and leaves
-  the rest of the workspace untouched.
+FlashBee has no account, no telemetry, and no cloud sync. It reads repositories from disk with the local `git` binary. Network access happens only when you fetch, pull, or push, using the remotes you configured.
 
 ## License
 
-MIT © 2026 wangzhuo. See [LICENSE](LICENSE).
+MIT

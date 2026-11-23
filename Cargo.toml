@@ -1,0 +1,23 @@
+[workspace]
+members = ["crates/flashbee-git", "crates/flashbee-app"]
+default-members = ["crates/flashbee-app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/imi4u36d/flashbee"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[profile.dev.package."*"]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
