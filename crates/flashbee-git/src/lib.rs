@@ -819,7 +819,7 @@ fn read_remote_branches(root_path: &Path, remotes: &[RemoteInfo]) -> Vec<RemoteB
     let raw = run_git(
         &[
             "for-each-ref",
-            "--format=%(refname:short)%09%(symref)",
+            "--format=%(refname)%09%(symref)",
             "refs/remotes",
         ],
         root_path,
@@ -831,31 +831,19 @@ fn read_remote_branches(root_path: &Path, remotes: &[RemoteInfo]) -> Vec<RemoteB
         if line.is_empty() {
             continue;
         }
-        let (name, symref) = line.split_once('\t').unwrap_or((line, ""));
+        let (full_ref, symref) = line.split_once('\t').unwrap_or((line, ""));
         // `origin/HEAD` is a symbolic alias of a real branch, not a branch itself.
-        if !symref.is_empty() || name.ends_with("/HEAD") {
+        if !symref.is_empty() || full_ref.ends_with("/HEAD") {
             continue;
         }
-
-        let remote = remotes
-            .iter()
-            .map(|candidate| candidate.name.as_str())
-            .filter(|candidate| {
-                name.len() > candidate.len()
-                    && name.starts_with(candidate)
-                    && name.as_bytes().get(candidate.len()) == Some(&b'/')
-            })
-            .max_by_key(|candidate| candidate.len())
-            .map(str::to_string)
-            .or_else(|| name.split_once('/').map(|(remote, _)| remote.to_string()));
-
-        let Some(remote) = remote else {
+        // Build the display name from the full ref: abbreviated names become
+        // `remotes/origin/main` once a local branch shadows `origin/main`.
+        let Some(name) = full_ref.strip_prefix("refs/remotes/") else {
             continue;
         };
-        let branch = name
-            .strip_prefix(&format!("{remote}/"))
-            .unwrap_or(name)
-            .to_string();
+        let Some((remote, branch)) = split_remote_branch(name, remotes) else {
+            continue;
+        };
 
         branches.push(RemoteBranchInfo {
             name: name.to_string(),
@@ -872,18 +860,66 @@ fn read_remote_branches(root_path: &Path, remotes: &[RemoteInfo]) -> Vec<RemoteB
     branches
 }
 
-fn read_upstream(root_path: &Path) -> Option<String> {
-    let raw = run_git(
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-        ],
+/// The remote-tracking branch the current branch follows. Resolved from the
+/// branch config rather than from Git's abbreviated names: those turn into
+/// `remotes/origin/main` as soon as a local branch shadows `origin/main`, and
+/// splitting that string by hand invents a remote named `remotes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UpstreamTracking {
+    remote: String,
+    branch: String,
+}
+
+impl UpstreamTracking {
+    /// Unambiguous ref used for revision ranges.
+    fn reference(&self) -> String {
+        format!("refs/remotes/{}/{}", self.remote, self.branch)
+    }
+
+    fn display(&self) -> String {
+        format!("{}/{}", self.remote, self.branch)
+    }
+}
+
+fn read_upstream(root_path: &Path, remotes: &[RemoteInfo]) -> Option<UpstreamTracking> {
+    let branch = run_git(&["branch", "--show-current"], root_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !branch.is_empty() {
+        let remote = run_git(
+            &["config", "--get", &format!("branch.{branch}.remote")],
+            root_path,
+        )
+        .unwrap_or_default();
+        let merge = run_git(
+            &["config", "--get", &format!("branch.{branch}.merge")],
+            root_path,
+        )
+        .unwrap_or_default();
+        // `.` means the branch tracks another local branch, not a remote.
+        if !remote.is_empty()
+            && remote != "."
+            && let Some(tracked) = merge.trim().strip_prefix("refs/heads/")
+            && !tracked.is_empty()
+        {
+            return Some(UpstreamTracking {
+                remote,
+                branch: tracked.to_string(),
+            });
+        }
+    }
+
+    // Fall back to Git's resolution when the config is missing or unexpected.
+    // `--symbolic-full-name` keeps the ref unambiguous.
+    let full_ref = run_git(
+        &["rev-parse", "--symbolic-full-name", "@{upstream}"],
         root_path,
     )
     .ok()?;
-    if raw.is_empty() { None } else { Some(raw) }
+    let name = full_ref.trim().strip_prefix("refs/remotes/")?;
+    let (remote, branch) = split_remote_branch(name, remotes)?;
+    Some(UpstreamTracking { remote, branch })
 }
 
 fn read_ahead_behind(root_path: &Path, upstream: &str) -> (u32, u32) {
@@ -910,14 +946,18 @@ fn read_ahead_behind(root_path: &Path, upstream: &str) -> (u32, u32) {
 fn inspect_root(root_path: &Path, detailed: bool) -> Result<RepositoryInspection, CommandError> {
     let current_branch_raw = run_git(&["branch", "--show-current"], root_path).unwrap_or_default();
     let branches_raw = run_git(
-        &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+        &["for-each-ref", "--format=%(refname)", "refs/heads"],
         root_path,
     )
     .unwrap_or_default();
 
+    // Strip the full ref prefix ourselves so a branch named `origin/main`
+    // stays `origin/main` instead of collapsing into `heads/origin/main`.
     let mut local_branches: Vec<String> = branches_raw
         .lines()
-        .map(|branch| branch.trim().to_string())
+        .map(str::trim)
+        .filter_map(|branch| branch.strip_prefix("refs/heads/"))
+        .map(str::to_string)
         .filter(|branch| !branch.is_empty())
         .collect();
 
@@ -942,12 +982,18 @@ fn inspect_root(root_path: &Path, detailed: bool) -> Result<RepositoryInspection
     let (remote_branches, remotes, upstream, ahead, behind) = if detailed {
         let remotes = read_remotes(root_path);
         let remote_branches = read_remote_branches(root_path, &remotes);
-        let upstream = read_upstream(root_path);
-        let (ahead, behind) = upstream
-            .as_deref()
-            .map(|value| read_ahead_behind(root_path, value))
+        let tracking = read_upstream(root_path, &remotes);
+        let (ahead, behind) = tracking
+            .as_ref()
+            .map(|tracking| read_ahead_behind(root_path, &tracking.reference()))
             .unwrap_or((0, 0));
-        (remote_branches, remotes, upstream, ahead, behind)
+        (
+            remote_branches,
+            remotes,
+            tracking.map(|tracking| tracking.display()),
+            ahead,
+            behind,
+        )
     } else {
         (Vec::new(), Vec::new(), None, 0, 0)
     };
@@ -1613,12 +1659,51 @@ fn preferred_remote(inspection: &RepositoryInspection) -> String {
         .unwrap_or_else(|| "origin".to_string())
 }
 
-fn split_remote_ref(value: &str) -> Option<(String, String)> {
-    let (remote, branch) = value.split_once('/')?;
-    if remote.is_empty() || branch.is_empty() {
+/// Splits `origin/main` — or Git's ambiguous abbreviation
+/// `remotes/origin/main` — into a configured remote and its branch. Longer
+/// remote names win so a remote such as `team/fork` is not cut down to `team`.
+fn split_remote_branch(value: &str, remotes: &[RemoteInfo]) -> Option<(String, String)> {
+    let value = value.trim();
+    let value = value.strip_prefix("refs/remotes/").unwrap_or(value);
+    if value.is_empty() {
+        return None;
+    }
+    if let Some(parts) = known_remote_branch(value, remotes) {
+        return Some(parts);
+    }
+    let ambiguous = value.strip_prefix("remotes/")?;
+    known_remote_branch(ambiguous, remotes).or_else(|| {
+        ambiguous
+            .split_once('/')
+            .filter(|(remote, branch)| !remote.is_empty() && !branch.is_empty())
+            .map(|(remote, branch)| (remote.to_string(), branch.to_string()))
+    })
+}
+
+fn known_remote_branch(value: &str, remotes: &[RemoteInfo]) -> Option<(String, String)> {
+    let remote = remotes
+        .iter()
+        .map(|remote| remote.name.as_str())
+        .filter(|name| {
+            value.len() > name.len()
+                && value.starts_with(name)
+                && value.as_bytes().get(name.len()) == Some(&b'/')
+        })
+        .max_by_key(|name| name.len())?;
+    let branch = &value[remote.len() + 1..];
+    if branch.is_empty() {
         return None;
     }
     Some((remote.to_string(), branch.to_string()))
+}
+
+/// Turns a full tracking ref into the short form shown in the UI.
+fn display_tracking_ref(value: &str) -> String {
+    value
+        .strip_prefix("refs/remotes/")
+        .or_else(|| value.strip_prefix("refs/heads/"))
+        .unwrap_or(value)
+        .to_string()
 }
 
 fn remote_tracking_ref_exists(root: &Path, remote: &str, branch: &str) -> bool {
@@ -1630,27 +1715,27 @@ fn remote_tracking_ref_exists(root: &Path, remote: &str, branch: &str) -> bool {
     .is_ok()
 }
 
-/// The ref the local branch is compared against. Upstream wins; otherwise use
-/// the remote branch with the same name, the remote HEAD, or its default
-/// branch. `None` means the remote is empty and every commit is new.
+/// The ref the local branch is compared against. The upstream ref wins;
+/// otherwise use the remote branch with the same name, the remote HEAD, or its
+/// default branch. `None` means the remote is empty and every commit is new.
 fn push_base(
     root: &Path,
-    upstream: Option<&str>,
+    upstream_ref: Option<&str>,
     remote: &str,
     remote_branch: &str,
 ) -> Option<String> {
-    if let Some(upstream) = upstream {
-        return Some(upstream.to_string());
+    if let Some(upstream_ref) = upstream_ref {
+        return Some(upstream_ref.to_string());
     }
     if remote_tracking_ref_exists(root, remote, remote_branch) {
-        return Some(format!("{remote}/{remote_branch}"));
+        return Some(format!("refs/remotes/{remote}/{remote_branch}"));
     }
     if remote_tracking_ref_exists(root, remote, "HEAD") {
-        return Some(format!("{remote}/HEAD"));
+        return Some(format!("refs/remotes/{remote}/HEAD"));
     }
     for fallback in ["main", "master"] {
         if remote_tracking_ref_exists(root, remote, fallback) {
-            return Some(format!("{remote}/{fallback}"));
+            return Some(format!("refs/remotes/{remote}/{fallback}"));
         }
     }
     None
@@ -1722,20 +1807,22 @@ pub fn push_info(input_path: &str) -> Result<PushInfo, CommandError> {
         ));
     }
 
-    let upstream_parts = inspection.upstream.as_deref().and_then(split_remote_ref);
-    let (remote, remote_branch) = match upstream_parts {
-        Some((remote, branch)) => (remote, branch),
-        None => (
+    let upstream_parts = inspection
+        .upstream
+        .as_deref()
+        .and_then(|value| split_remote_branch(value, &inspection.remotes));
+    let (remote, remote_branch) = upstream_parts.clone().unwrap_or_else(|| {
+        (
             preferred_remote(&inspection),
             inspection.current_branch.clone(),
-        ),
-    };
-    let base = push_base(
-        &root,
-        inspection.upstream.as_deref(),
-        &remote,
-        &remote_branch,
-    );
+        )
+    });
+    // Compare against the full tracking ref: the abbreviated form may resolve
+    // to a local branch that happens to share the name.
+    let upstream_ref = upstream_parts
+        .as_ref()
+        .map(|(remote, branch)| format!("refs/remotes/{remote}/{branch}"));
+    let base = push_base(&root, upstream_ref.as_deref(), &remote, &remote_branch);
     let (ahead, behind) = base
         .as_deref()
         .map(|value| read_ahead_behind(&root, value))
@@ -1972,7 +2059,10 @@ pub fn push_repository(
     }
 
     let options = options.unwrap_or_default();
-    let upstream_parts = inspection.upstream.as_deref().and_then(split_remote_ref);
+    let upstream_parts = inspection
+        .upstream
+        .as_deref()
+        .and_then(|value| split_remote_branch(value, &inspection.remotes));
     let remote = options
         .remote
         .as_deref()
@@ -2099,7 +2189,7 @@ pub fn push_repository(
         && inspection.upstream.is_none()
         && remote_branch == inspection.current_branch
     {
-        let tracking = format!("--set-upstream-to={remote}/{remote_branch}");
+        let tracking = format!("--set-upstream-to=refs/remotes/{remote}/{remote_branch}");
         let _ = run_git_capture(&["branch", tracking.as_str()], &root, &[]);
     }
 
@@ -3206,7 +3296,9 @@ pub fn switch_branch(
         args.push("-b".to_string());
         args.push(branch.clone());
         args.push("--track".to_string());
-        args.push(remote.name.clone());
+        // Track the full ref so a local branch with the same name cannot
+        // shadow the remote-tracking branch.
+        args.push(format!("refs/remotes/{}", remote.name));
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let output = run_git_capture(&refs, &root, GIT_NETWORK_ENV)?;
@@ -3277,6 +3369,7 @@ fn compare_ref_counts(root: &Path, base: &str, tip: &str) -> (u32, u32) {
 
 pub fn list_branch_info(input_path: &str) -> Result<Vec<BranchInfo>, CommandError> {
     let root = repository_root(input_path)?;
+    let remotes = read_remotes(&root);
     let current = run_git(&["branch", "--show-current"], &root)
         .unwrap_or_default()
         .trim()
@@ -3293,7 +3386,7 @@ pub fn list_branch_info(input_path: &str) -> Result<Vec<BranchInfo>, CommandErro
             "-c",
             "core.quotePath=false",
             "for-each-ref",
-            "--format=%(refname)%00%(refname:short)%00%(objectname:short)%00%(committerdate:unix)%00%(contents:subject)%00%(upstream:short)%00%(symref)%00",
+            "--format=%(refname)%00%(objectname:short)%00%(committerdate:unix)%00%(contents:subject)%00%(upstream)%00%(symref)%00",
             "refs/heads",
             "refs/remotes",
         ],
@@ -3308,7 +3401,16 @@ pub fn list_branch_info(input_path: &str) -> Result<Vec<BranchInfo>, CommandErro
         }
         let mut fields = record.split('\0');
         let full_ref = fields.next().unwrap_or("").trim();
-        let name = fields.next().unwrap_or("").trim();
+        let is_remote = full_ref.starts_with("refs/remotes/");
+        // Derive the display name ourselves: Git abbreviates a ref that shares
+        // its name with a local branch to `remotes/origin/main`.
+        let name = if is_remote {
+            full_ref.strip_prefix("refs/remotes/")
+        } else {
+            full_ref.strip_prefix("refs/heads/")
+        }
+        .unwrap_or(full_ref)
+        .to_string();
         if name.is_empty() {
             continue;
         }
@@ -3319,9 +3421,8 @@ pub fn list_branch_info(input_path: &str) -> Result<Vec<BranchInfo>, CommandErro
             .next()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string);
+            .map(display_tracking_ref);
         let symref = fields.next().unwrap_or("").trim();
-        let is_remote = full_ref.starts_with("refs/remotes/");
         if is_remote && (!symref.is_empty() || name.ends_with("/HEAD")) {
             continue;
         }
@@ -3329,11 +3430,11 @@ pub fn list_branch_info(input_path: &str) -> Result<Vec<BranchInfo>, CommandErro
         let (ahead, behind) = if is_current || is_remote {
             (0, 0)
         } else {
-            compare_ref_counts(&root, "HEAD", name)
+            compare_ref_counts(&root, "HEAD", full_ref)
         };
-        let merged = !is_remote && (is_current || ref_is_ancestor(&root, name, "HEAD"));
+        let merged = !is_remote && (is_current || ref_is_ancestor(&root, full_ref, "HEAD"));
         let remote = if is_remote {
-            name.split_once('/').map(|(remote, _)| remote.to_string())
+            split_remote_branch(&name, &remotes).map(|(remote, _)| remote)
         } else {
             None
         };
@@ -3348,7 +3449,7 @@ pub fn list_branch_info(input_path: &str) -> Result<Vec<BranchInfo>, CommandErro
             short_commit,
             subject,
             time,
-            worktree_path: worktree_by_branch.get(name).cloned(),
+            worktree_path: worktree_by_branch.get(&name).cloned(),
             merged,
         });
     }
@@ -3390,19 +3491,23 @@ pub fn create_branch(
         .iter()
         .find(|branch| branch.name == start)
         .cloned();
+    // Fully-qualified: `origin/main` alone may name a local branch instead.
+    let tracking_ref = tracking
+        .as_ref()
+        .map(|tracking| format!("refs/remotes/{}", tracking.name));
 
     let output = if checkout {
         let mut args = vec!["switch", "-c", name.as_str()];
-        if let Some(tracking) = tracking.as_ref() {
+        if let Some(tracking_ref) = tracking_ref.as_deref() {
             args.push("--track");
-            args.push(tracking.name.as_str());
+            args.push(tracking_ref);
         } else {
             args.push(start_hash.as_str());
         }
         run_git_capture(&args, &root, GIT_NETWORK_ENV)?
-    } else if let Some(tracking) = tracking.as_ref() {
+    } else if let Some(tracking_ref) = tracking_ref.as_deref() {
         run_git_capture(
-            &["branch", "--track", name.as_str(), tracking.name.as_str()],
+            &["branch", "--track", name.as_str(), tracking_ref],
             &root,
             &[],
         )?
@@ -4905,6 +5010,74 @@ mod tests {
             git_in(&repository, &["rev-parse", "HEAD"])
         );
         assert_eq!(push_info(path).unwrap().ahead, 0);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn resolves_push_target_when_a_local_branch_shadows_the_remote() {
+        let root = temp_root("shadowed-upstream");
+        let remote = root.join("origin.git");
+        let repository = root.join("repository");
+        fs::create_dir_all(&remote).unwrap();
+        fs::create_dir_all(&repository).unwrap();
+
+        git_in(&remote, &["init", "--bare", "-b", "main"]);
+        git_in(&repository, &["init", "-b", "main"]);
+        configure_user(&repository);
+        commit_file(&repository, "readme.txt", "first\n", "base");
+        git_in(
+            &repository,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        git_in(&repository, &["push", "-u", "origin", "main"]);
+
+        // A local branch sharing the remote-tracking name makes every
+        // abbreviated `origin/main` ref ambiguous. Git then reports the
+        // upstream as `remotes/origin/main`, which must not become a remote
+        // called `remotes`.
+        git_in(&repository, &["branch", "origin/main", "main"]);
+
+        let path = repository.to_str().unwrap();
+        let info = push_info(path).unwrap();
+        assert_eq!(info.remote, "origin");
+        assert_eq!(info.remote_branch, "main");
+        assert_eq!(info.upstream.as_deref(), Some("origin/main"));
+
+        commit_file(&repository, "readme.txt", "first\nsecond\n", "second");
+        let info = push_info(path).unwrap();
+        assert_eq!((info.ahead, info.behind), (1, 0));
+        assert_eq!(info.commits.len(), 1);
+
+        push_repository(path, None).unwrap();
+        assert_eq!(
+            git_in(&remote, &["rev-parse", "main"]),
+            git_in(&repository, &["rev-parse", "HEAD"])
+        );
+        assert_eq!(push_info(path).unwrap().ahead, 0);
+
+        // The branch manager lists both the local shadow and the remote
+        // branch under their real names.
+        let branches = list_branch_info(path).unwrap();
+        assert!(
+            branches
+                .iter()
+                .any(|branch| branch.name == "origin/main" && !branch.is_remote)
+        );
+        let tracking = branches
+            .iter()
+            .find(|branch| branch.name == "origin/main" && branch.is_remote)
+            .unwrap();
+        assert_eq!(tracking.remote.as_deref(), Some("origin"));
+
+        let inspection = inspect_root(&repository, true).unwrap();
+        assert_eq!(inspection.upstream.as_deref(), Some("origin/main"));
+        assert!(
+            inspection
+                .branches
+                .iter()
+                .any(|branch| branch == "origin/main")
+        );
 
         fs::remove_dir_all(&root).unwrap();
     }
